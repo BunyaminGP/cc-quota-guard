@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-quota_gate.py — Claude Code PostToolUse hook. Registered on two matchers:
+quota_gate.py — Claude Code PostToolUse hook. Registered on a single "*"
+matcher (every tool call); it distinguishes TodoWrite calls internally via
+`tool_name` rather than needing a second matcher registration:
 
-  - "TodoWrite": records the todo list to `.cc-quota/todos_state.json`
-    (which item is in_progress, and which git commit it started from) and
-    checks the SOFT threshold (finish the current item, then stop cleanly).
-  - "*" (every tool): checks the HARD thresholds on EVERY call. A todo
-    item's own work (many Edit/Bash/Write calls) can span a long stretch of
-    time after a single TodoWrite call — if we only checked at TodoWrite
-    time, a quota spike in between would be caught far too late.
+  - On a TodoWrite call: records the todo list to
+    `.cc-quota/todos_state.json` (which item is in_progress, and which git
+    commit it started from) and checks the SOFT threshold (finish the
+    current item, then stop cleanly).
+  - On EVERY call: checks the HARD thresholds. A todo item's own work (many
+    Edit/Bash/Write calls) can span a long stretch of time after a single
+    TodoWrite call — if we only checked at TodoWrite time, a quota spike in
+    between would be caught far too late.
 
 What happens at the hard threshold depends on `hard_abort_enabled`
 (default: **false**):
@@ -48,6 +51,24 @@ Config precedence for the percentage thresholds (highest wins): CC_* env
 vars > .cc-quota/config.json > plugin userConfig > built-in defaults.
 hard_abort_enabled uses the same order MINUS .cc-quota/config.json, which
 is deliberately never consulted for it (see above). See _load_config().
+
+Trust hardening (why these exist — all closing the same class of problem
+as the STOP.json staleness check above: a cloned/untrusted repo can ship
+files inside `.cc-quota/` even though that directory is meant to be local,
+gitignored runtime state):
+  - `.cc-quota` itself is never trusted if it's a symlink or an existing
+    non-directory — writing through/over it could otherwise land anywhere
+    on disk. See _quota_dir_is_safe().
+  - A `todos_state.json` that is actually tracked by git (i.e. committed —
+    the opposite of what the README tells users to do) is not trusted to
+    claim an in_progress item for hard-abort revert purposes; a planted
+    fake in-progress entry must not be able to trigger an automatic
+    `git stash` on its own say-so. See _sanitize_state_for_revert().
+  - Percentage thresholds from any source are clamped to (0, 100]; an
+    out-of-range or unparsable value (e.g. a project shipping
+    `session_hard: 99999` to effectively disable the guard, or a typoed
+    CC_* env var) is ignored instead of applied or crashing the hook. See
+    _parse_pct().
 """
 
 import json
@@ -79,6 +100,34 @@ def _quota_dir(proj):
     return os.path.join(proj, ".cc-quota")
 
 
+def _quota_dir_is_safe(proj):
+    """
+    True only if `.cc-quota` doesn't exist yet, or already exists as an
+    ordinary (non-symlinked) directory.
+
+    The README tells users to .gitignore `.cc-quota/`, but nothing stops a
+    cloned/untrusted repo from committing it anyway — including as a
+    symlink. Git materializes a committed symlink as a real OS symlink on
+    platforms where `core.symlinks` is on by default (Linux/macOS), so a
+    repo could ship `.cc-quota -> /some/other/path` and have every write
+    this hook makes (todos_state.json, STOP.json, progress.md, ...) land
+    at that other path instead of inside the project. On platforms that
+    don't materialize git symlinks (Windows by default), the same commit
+    instead checks out as an ordinary file named `.cc-quota`, which would
+    make `os.makedirs(..., exist_ok=True)` raise instead of silently
+    writing elsewhere — still not something to let happen uncaught.
+
+    Callers must treat False as "fail open": skip the write (or the read)
+    rather than raising or following the symlink.
+    """
+    d = _quota_dir(proj)
+    if os.path.islink(d):
+        return False
+    if os.path.exists(d) and not os.path.isdir(d):
+        return False
+    return True
+
+
 def _marker_path(proj):
     return os.path.join(_quota_dir(proj), "STOP.json")
 
@@ -89,6 +138,33 @@ def _todos_state_path(proj):
 
 def _truthy(v):
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_pct(value):
+    """
+    Parses a percentage threshold, accepting only finite numbers in
+    (0, 100]. Returns None — meaning "ignore this, keep whatever was set
+    before" — for anything else: a value that doesn't parse as a number,
+    NaN, zero, negative, or above 100.
+
+    Applied uniformly to every source a threshold can come from (plugin
+    userConfig, .cc-quota/config.json, CC_* env vars) so that:
+      - a malformed value (e.g. a typoed CC_SESSION_SOFT="80%") never
+        crashes the hook — previously only two of the three sources were
+        wrapped in a try/except, so a bad env var took down every single
+        tool-call hook invocation for the rest of the session;
+      - an out-of-range value can't be used by a cloned/untrusted repo's
+        `.cc-quota/config.json` to neuter the guard (e.g. session_hard
+        set to 99999, which would never trigger) or to grief it into
+        blocking every tool call (e.g. session_soft set to 0 or -1).
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v <= 0 or v > 100:  # v != v is the NaN check
+        return None
+    return v
 
 
 def _load_config(proj):
@@ -117,10 +193,9 @@ def _load_config(proj):
     for env, key in plugin_option_map.items():
         v = os.environ.get(env)
         if v not in (None, ""):
-            try:
-                cfg[key] = float(v)
-            except ValueError:
-                pass
+            parsed = _parse_pct(v)
+            if parsed is not None:
+                cfg[key] = parsed
     if os.environ.get("CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED") not in (None, ""):
         cfg["hard_abort_enabled"] = _truthy(os.environ["CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED"])
 
@@ -138,7 +213,9 @@ def _load_config(proj):
             fc = json.load(f)
         for k in ("session_soft", "session_hard", "weekly_hard"):
             if k in fc:
-                cfg[k] = float(fc[k])
+                parsed = _parse_pct(fc[k])
+                if parsed is not None:
+                    cfg[k] = parsed
     except Exception:
         pass
 
@@ -149,7 +226,9 @@ def _load_config(proj):
     }
     for env, key in env_map.items():
         if os.environ.get(env):
-            cfg[key] = float(os.environ[env])
+            parsed = _parse_pct(os.environ[env])
+            if parsed is not None:
+                cfg[key] = parsed
     if os.environ.get("CC_HARD_ABORT"):
         cfg["hard_abort_enabled"] = _truthy(os.environ["CC_HARD_ABORT"])
     return cfg
@@ -185,7 +264,22 @@ def _is_git_repo(proj):
     return code == 0 and out == "true"
 
 
+def _is_git_tracked(proj, relpath):
+    """
+    True if `relpath` (relative to `proj`, forward slashes) is committed/
+    tracked by git. Used to distrust an in_progress claim in
+    todos_state.json for hard-abort purposes: the README tells users to
+    .gitignore `.cc-quota/` because it's local runtime state, so a tracked
+    copy is a sign it shipped with the repo (possibly untrusted) rather
+    than being written by this hook just now.
+    """
+    code, out, _err = _git(proj, "ls-files", "--error-unmatch", "--", relpath)
+    return code == 0 and bool(out.strip())
+
+
 def _read_todos_state(proj):
+    if not _quota_dir_is_safe(proj):
+        return None
     try:
         with open(_todos_state_path(proj)) as f:
             return json.load(f)
@@ -194,6 +288,8 @@ def _read_todos_state(proj):
 
 
 def _write_todos_state(proj, state):
+    if not _quota_dir_is_safe(proj):
+        return
     os.makedirs(_quota_dir(proj), exist_ok=True)
     tmp = _todos_state_path(proj) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -228,7 +324,17 @@ def _save_todos_state(proj, todos, is_git):
 
 
 def _append_progress_note(proj, text):
+    if not _quota_dir_is_safe(proj):
+        return
     path = os.path.join(_quota_dir(proj), "progress.md")
+    # Unlike the other writers below, this one is a plain append rather than
+    # a write-to-temp-then-replace — and an append-mode open() ALWAYS
+    # follows a symlink (replace() doesn't, which is why the temp+replace
+    # writers are already safe). If progress.md itself (not just the
+    # `.cc-quota` directory) were ever committed as a symlink, appending
+    # here would write into whatever it points at. Refuse outright instead.
+    if os.path.islink(path):
+        return
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write("\n" + text + "\n")
@@ -237,9 +343,18 @@ def _append_progress_note(proj, text):
 
 
 def _write_marker(proj, data):
+    if not _quota_dir_is_safe(proj):
+        return
     os.makedirs(_quota_dir(proj), exist_ok=True)
-    with open(_marker_path(proj), "w", encoding="utf-8") as f:
+    # Write-to-temp-then-replace (like _write_todos_state) rather than a
+    # direct open(..., "w") — os.replace() swaps the STOP.json path itself
+    # rather than following it, so this is safe even if STOP.json were a
+    # symlink; a direct "w" open would have followed it and clobbered
+    # whatever it pointed at.
+    tmp = _marker_path(proj) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, _marker_path(proj))
 
 
 def _marker_still_valid(proj):
@@ -268,6 +383,31 @@ def _marker_still_valid(proj):
 
 
 # --------------------------------------------------------------------------- hard threshold
+
+def _sanitize_state_for_revert(proj, state, is_git):
+    """
+    Refuses to trust an in_progress claim in `state` (as read from
+    todos_state.json) for hard-abort revert purposes if that file is
+    itself tracked by git.
+
+    todos_state.json is meant to be local runtime state — the README
+    tells users to .gitignore `.cc-quota/` — so a *tracked* copy is a sign
+    it shipped with the repo rather than being written by this hook. A
+    cloned/untrusted repo could otherwise plant a fake in_progress entry
+    so that the very first tool call in that project (before Claude has
+    ever called TodoWrite there) sees hard_abort_enabled + an in_progress
+    item + is_git all true, and runs `git stash` on whatever uncommitted
+    work already happens to be sitting in that project's working tree —
+    entirely unrelated to anything Claude did. This check only costs a
+    `git ls-files` call, and only when we're actually about to act on an
+    in_progress claim (i.e. only near a hard threshold), not on every call.
+    """
+    if not state or not state.get("in_progress") or not is_git:
+        return state
+    if _is_git_tracked(proj, ".cc-quota/todos_state.json"):
+        return dict(state, in_progress=None)
+    return state
+
 
 def _do_hard_stop(proj, which, pct, resets_at, thr, state, is_git, hard_abort_enabled):
     in_progress = (state or {}).get("in_progress")
@@ -407,8 +547,11 @@ def main():
     # block repeatedly and create a loop while cc-run is asleep waiting for
     # the reset. A marker that's stale (past its resets_at) or foreign
     # (shipped with the project instead of written by this run) is ignored
-    # and removed instead of trusted — see _marker_still_valid().
-    if os.path.exists(_marker_path(proj)):
+    # and removed instead of trusted — see _marker_still_valid(). Skipped
+    # entirely if `.cc-quota` isn't a safe (real, non-symlinked) directory —
+    # see _quota_dir_is_safe() — so we never touch a path that could resolve
+    # outside the project.
+    if _quota_dir_is_safe(proj) and os.path.exists(_marker_path(proj)):
         if _marker_still_valid(proj):
             _allow()
         try:
@@ -439,12 +582,15 @@ def main():
     w_pct = week.get("pct")
 
     # HARD threshold — checked on every call, takes priority over soft.
+    # state is re-sanitized right before use: an in_progress claim is only
+    # honored for revert purposes if todos_state.json isn't itself tracked
+    # by git (see _sanitize_state_for_revert()).
     if s_pct is not None and s_pct >= cfg["session_hard"]:
         _do_hard_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_hard"],
-                      state, is_git, cfg["hard_abort_enabled"])
+                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"])
     if w_pct is not None and w_pct >= cfg["weekly_hard"]:
         _do_hard_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_hard"],
-                      state, is_git, cfg["hard_abort_enabled"])
+                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"])
 
     # SOFT threshold — only checked at item boundaries (TodoWrite calls).
     if tool_name == "TodoWrite" and s_pct is not None and s_pct >= cfg["session_soft"]:

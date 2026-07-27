@@ -162,14 +162,16 @@ CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
 
 ## Nasıl çalışır
 
-1. **Hook** (`scripts/quota_gate.py`) — iki `PostToolUse` matcher'ına takılı:
-   - `TodoWrite`: hangi maddenin `in_progress` olduğunu ve hangi commit'ten
-     başladığını `.cc-quota/todos_state.json`'a kaydeder; YUMUŞAK eşiği
-     kontrol eder.
-   - `*` (tüm araçlar): SERT eşikleri **her** çağrıda kontrol eder. Bir
-     maddenin içindeki iş (birçok Edit/Bash/Write çağrısı) tek bir
-     `TodoWrite`'tan sonra uzun sürebilir; sadece `TodoWrite`'ta bakmak bir
-     kota patlamasını çok geç fark ettirir.
+1. **Hook** (`scripts/quota_gate.py`) — tek bir `PostToolUse` `*`
+   matcher'ına takılı (her tool çağrısı); `TodoWrite` çağrılarını ikinci bir
+   matcher'a ihtiyaç duymadan kendi içinde ayırt eder:
+   - Bir `TodoWrite` çağrısında: hangi maddenin `in_progress` olduğunu ve
+     hangi commit'ten başladığını `.cc-quota/todos_state.json`'a kaydeder;
+     YUMUŞAK eşiği kontrol eder.
+   - **Her** çağrıda: SERT eşikleri kontrol eder. Bir maddenin içindeki iş
+     (birçok Edit/Bash/Write çağrısı) tek bir `TodoWrite`'tan sonra uzun
+     sürebilir; sadece `TodoWrite`'ta bakmak bir kota patlamasını çok geç
+     fark ettirir.
 2. **State dosyaları**
    - `.cc-quota/progress.md` — ne bitti, sırada ne var, ve (sert geri alma
      tetiklendiyse) hangi madde geri alındı. Reset sonrası buradan devam
@@ -216,10 +218,33 @@ olması makul değil. Açmadan önce bilmeniz gerekenler:
   durduk, tekrar kontrol etme" olarak sayıyor. Süresi geçmiş, bozuk ya da
   klonlanan projeyle birlikte gelen biri yok sayılıp temizleniyor — korumayı
   sessizce kapatamıyor.
+- **Uydurma bir `todos_state.json` tek başına stash tetikleyemez.**
+  Hard-abort geri alması için bir `in_progress` iddiasına güvenmeden önce
+  hook, `todos_state.json`'ın git tarafından takip edilip edilmediğini
+  kontrol eder. Bu dosya yerel çalışma zamanı durumu olmalı (aşağıdaki
+  `.gitignore` notuna bakın); *takip edilen* bir kopya, hook tarafından az
+  önce yazılmadığının, repoyla birlikte geldiğinin işaretidir — bu durumda
+  `in_progress` iddiası güvenilmeyip yok sayılır.
+- **`.cc-quota` bir symlink (ya da klasör olmayan bir şey) olup bundan
+  kurtulamaz.** Klonlanan bir repo `.cc-quota`'yı diskte başka bir yere
+  symlink olarak commit'leyebilir (git'in symlink'leri varsayılan olarak
+  gerçek symlink'e çevirdiği platformlarda) ve hook'un yaptığı her yazma
+  projenin dışına, oraya gidebilirdi. Hook her yazmadan (ve kendi state
+  dosyalarının her okumasından) önce bunu kontrol eder, symlink'i takip
+  etmek yerine reddeder.
+- **Yüzde eşikleri sınırlanır.** `session_soft` / `session_hard` /
+  `weekly_hard`, hangi kaynaktan gelirse gelsin (plugin config,
+  `.cc-quota/config.json`, `CC_*` ortam değişkenleri), yalnızca `(0, 100]`
+  aralığında kabul edilir. Bu, klonlanan bir repo'nun `config.json`'ının
+  örneğin `session_hard: 99999` vererek korumayı etkisizleştirmesini, ya da
+  `session_soft: 0` vererek her tool çağrısını bloklamasını engeller — ayrıca
+  yanlış yazılmış bir ortam değişkeninin (ör. `CC_SESSION_SOFT=80%`)
+  yok sayılmak yerine hook'u çökertmesini önler.
 - **Kendi projenizin `.gitignore`'una `.cc-quota/` ekleyin.** Bu, yerel
   çalışma zamanı durumu (todo anlık görüntüleri, stop işaretçileri) —
   commit'lenecek bir şey değil; izlenmemesi ayrıca gerçek değişikliklerle
-  birlikte `git stash`'e sürüklenmesini de önler.
+  birlikte `git stash`'e sürüklenmesini de önler ve yukarıdaki korumaların
+  hiç devreye girmesine gerek bırakmaz.
 
 ## Gereksinimler
 

@@ -158,15 +158,16 @@ auto-revert.
 
 ## How it works
 
-1. **Hook** (`scripts/quota_gate.py`) — registered on two `PostToolUse`
-   matchers:
-   - `TodoWrite`: records which item is `in_progress` and which git commit
-     it started from, into `.cc-quota/todos_state.json`; checks the SOFT
-     threshold.
-   - `*` (every tool): checks the HARD thresholds on **every** call. A
-     single todo item's work (many Edit/Bash/Write calls) can run long after
-     one `TodoWrite` call — checking only at `TodoWrite` time would notice a
-     quota spike far too late.
+1. **Hook** (`scripts/quota_gate.py`) — registered on a single `PostToolUse`
+   `*` matcher (every tool call); it distinguishes `TodoWrite` calls
+   internally rather than needing a second matcher registration:
+   - On a `TodoWrite` call: records which item is `in_progress` and which
+     git commit it started from, into `.cc-quota/todos_state.json`; checks
+     the SOFT threshold.
+   - On **every** call: checks the HARD thresholds. A single todo item's
+     work (many Edit/Bash/Write calls) can run long after one `TodoWrite`
+     call — checking only at `TodoWrite` time would notice a quota spike far
+     too late.
 2. **State files**
    - `.cc-quota/progress.md` — what's done, what's next, and (if hard-abort
      fired) which item was reverted. Read on resume.
@@ -211,10 +212,31 @@ just installed. A few things to know before you turn it on:
   re-check" while its `resets_at` is still in the future. One that's
   expired, malformed, or simply shipped inside a cloned project is ignored
   and cleaned up instead of silently turning protection off.
+- **A planted `todos_state.json` can't trigger a stash on its own say-so.**
+  Before honoring an `in_progress` claim for a hard-abort revert, the hook
+  checks whether `todos_state.json` is itself tracked by git. It's meant to
+  be local runtime state (see the `.gitignore` note below); a *tracked* copy
+  is a sign it shipped with the repo rather than being written by this hook
+  moments ago, so its `in_progress` claim is ignored instead of trusted.
+- **`.cc-quota` can't be a symlink (or otherwise not-a-directory) and get
+  away with it.** A cloned repo could otherwise commit `.cc-quota` as a
+  symlink to somewhere else on disk (materialized as a real symlink on
+  platforms where git does that by default) and have every write this hook
+  makes land there instead of inside the project. The hook checks this
+  before every write (and refuses instead of following it) and before every
+  read of its own state files.
+- **Percentage thresholds are clamped.** `session_soft` / `session_hard` /
+  `weekly_hard`, from any source (plugin config, `.cc-quota/config.json`,
+  `CC_*` env vars), are only accepted in `(0, 100]`. This stops a cloned
+  repo's `config.json` from setting e.g. `session_hard: 99999` to
+  effectively disable the guard, or `session_soft: 0` to block every single
+  tool call — and stops a typoed env var (e.g. `CC_SESSION_SOFT=80%`) from
+  crashing the hook instead of being ignored.
 - **Add `.cc-quota/` to your own project's `.gitignore`.** It's local
   runtime state (todo snapshots, stop markers), not something to commit —
   keeping it untracked also avoids it getting swept into a `git stash` along
-  with real changes.
+  with real changes, and keeps the protections above from ever needing to
+  kick in in the first place.
 
 ## Requirements
 

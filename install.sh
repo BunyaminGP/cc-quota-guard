@@ -40,19 +40,23 @@ except Exception:
 hooks = cfg.setdefault("hooks", {})
 ptu = hooks.setdefault("PostToolUse", [])
 
-# Two matchers are needed:
-#   - "TodoWrite": records todo state + checks the SOFT threshold.
-#   - "*"        : checks the HARD threshold on EVERY tool call (so a quota
-#                  spike in the middle of an item is caught promptly).
-WANTED_MATCHERS = ["TodoWrite", "*"]
+# A single "*" matcher (every tool call) is all that's needed: the hook
+# script itself distinguishes TodoWrite calls internally via tool_name to
+# record todo state + check the SOFT threshold, and checks the HARD
+# threshold on every call regardless of which tool it was (so a quota
+# spike in the middle of an item is caught promptly). An older install may
+# still have a separate "TodoWrite" matcher entry from before this hook
+# script started dispatching internally — that's now redundant (it would
+# just make the hook run twice on every TodoWrite call) and is removed
+# below if present.
+WANTED_MATCHERS = ["*"]
+LEGACY_MATCHERS = ["TodoWrite"]
+
+def matches_us(entry):
+    return any(h.get("command") == "python3" and h.get("args") == [hook_script] for h in entry.get("hooks", []))
 
 def has_entry(matcher):
-    for entry in ptu:
-        if entry.get("matcher") == matcher:
-            for h in entry.get("hooks", []):
-                if h.get("command") == "python3" and h.get("args") == [hook_script]:
-                    return True
-    return False
+    return any(entry.get("matcher") == matcher and matches_us(entry) for entry in ptu)
 
 added = []
 for matcher in WANTED_MATCHERS:
@@ -63,12 +67,23 @@ for matcher in WANTED_MATCHERS:
         })
         added.append(matcher)
 
-if added:
+removed = []
+for entry in list(ptu):
+    if entry.get("matcher") in LEGACY_MATCHERS and matches_us(entry):
+        ptu.remove(entry)
+        removed.append(entry.get("matcher"))
+
+if added or removed:
     with open(settings_path, "w") as f:
         json.dump(cfg, f, indent=2)
-    print(f"   Added PostToolUse matchers: {', '.join(added)}")
+    parts = []
+    if added:
+        parts.append(f"added: {', '.join(added)}")
+    if removed:
+        parts.append(f"removed redundant: {', '.join(removed)}")
+    print("   " + "; ".join(parts))
 else:
-    print("   Hooks already registered, nothing changed.")
+    print("   Hooks already up to date, nothing changed.")
 PY
 
 # Optional PATH shortcut for cc-run (only if ~/.local/bin exists)
@@ -93,5 +108,7 @@ echo "  1) Is usage readable:     python3 $DEST/scripts/usage.py"
 echo "  2) API schema (if needed): python3 $DEST/scripts/usage.py --probe"
 echo "  3) Set thresholds (e.g.):  cc-run --threshold 80 --session-hard 95 --weekly-hard 98 \"task...\""
 echo
-echo "Note: to upgrade an older install (only had the TodoWrite matcher),"
-echo "      just re-run this script — it adds the missing '*' matcher."
+echo "Note: to upgrade an older install (registered on 'TodoWrite' and '*'"
+echo "      separately, or missing '*' altogether), just re-run this script —"
+echo "      it adds the '*' matcher if missing and removes the now-redundant"
+echo "      'TodoWrite' one."
