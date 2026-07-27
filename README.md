@@ -34,8 +34,15 @@ stops *before* that, at a point you choose, and in a way you choose:
 ```
 
 That's it — no copying files by hand, no editing `settings.json`. The hooks
-register automatically, and `cc-run` (see below) becomes available as a bare
-command in any Bash tool call while the plugin is enabled.
+register automatically and start protecting every session immediately.
+
+**Note:** a plugin's `bin/` directory is only added to PATH for Claude's own
+internal Bash tool calls — not for *your* terminal. Since `cc-run` is meant
+to be run by you (it's what starts a headless, self-resuming Claude run),
+you need one small extra step to call it as a bare `cc-run` command from
+your own shell — see [Using cc-run from your own terminal](#using-cc-run-from-your-own-terminal)
+below. The hooks themselves (the actual quota protection) don't need this —
+they work the moment the plugin is installed, regardless.
 
 Install at project scope instead of user scope if you want it shared with
 your team via version control:
@@ -78,6 +85,36 @@ bash install.sh
 This copies the tool into `~/.claude/cc-quota-guard/` and merges the
 `PostToolUse` hooks into `~/.claude/settings.json` (idempotent — safe to
 re-run, e.g. to pick up an update).
+
+## Using cc-run from your own terminal
+
+One-time setup so `cc-run` works as a bare command in *your* shell (not
+required for the hooks/protection — only for the `cc-run` wrapper itself):
+
+**Windows / PowerShell:**
+
+```powershell
+Get-Content shell\cc-run.ps1 | Add-Content $PROFILE
+. $PROFILE
+```
+
+(requires Git for Windows, for Git Bash — `cc-run` is a bash script and
+PowerShell can't run it directly). This defines a `cc-run` function that
+resolves the plugin's current install path each time, so it survives plugin
+updates automatically.
+
+**macOS / Linux:**
+
+```bash
+cat shell/cc-run.sh >> ~/.bashrc   # or ~/.zshrc
+source ~/.bashrc
+```
+
+Same idea — a shell function that re-resolves the plugin's install path on
+every call. If you used the manual `install.sh` fallback instead of the
+plugin system, you already have a stable path at
+`~/.claude/cc-quota-guard/bin/cc-run` — just make sure `~/.local/bin` (where
+`install.sh` symlinks it) is on your `PATH` and skip this step.
 
 ## Usage
 
