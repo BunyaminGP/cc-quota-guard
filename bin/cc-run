@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# cc-run — quota-aware orchestrator for Claude Code.
+#
+# Two-tier quota protection:
+#   - SOFT threshold (--threshold, default 80): the current todo item is
+#     allowed to finish, then Claude wraps up cleanly (commit + progress.md).
+#   - HARD threshold (--session-hard default 95, --weekly-hard default 98):
+#     can fire mid-item. By default this only forces a clean stop (nothing
+#     is touched automatically). Pass --enable-hard-abort to also revert the
+#     in-progress item with `git stash` and redo it from scratch after reset
+#     — see README before turning this on, it rewrites your working tree.
+#
+# Flow:
+#   1) Starts Claude with the task (thresholds passed as env vars).
+#   2) The quota_gate hook (installed on TodoWrite + every tool) stops Claude
+#      when a threshold is hit (soft: clean stop; hard: clean stop, or
+#      revert+stop if --enable-hard-abort) and leaves .cc-quota/STOP.json.
+#   3) This script reads the reset time from STOP.json, SLEEPS until then,
+#      removes the marker, and resumes with `claude -c`.
+#   4) When Claude finishes the whole task it writes "CC_QUOTA_DONE" into
+#      .cc-quota/progress.md; this script sees that and stops.
+#
+# Usage:
+#   cc-run --threshold 80 --session-hard 95 --weekly-hard 98 "the task..."
+#   cc-run --enable-hard-abort @task.md
+#
+# Requires: bash, python3, claude (CLI). The hard-abort revert also requires git.
+set -euo pipefail
+
+THRESHOLD=80
+SESSION_HARD=95
+WEEKLY_HARD=98
+HARD_ABORT=0
+BUFFER_SECONDS="${CC_RESUME_BUFFER:-60}"
+# So Claude can keep editing headlessly across resumes without asking for
+# approval each time. WARNING: acceptEdits lets Claude make file edits
+# WITHOUT asking. If that's not acceptable, set CC_CLAUDE_ARGS="" and run
+# interactively instead.
+CLAUDE_ARGS="${CC_CLAUDE_ARGS:---permission-mode acceptEdits}"
+PROJ="$(pwd)"
+
+usage() {
+  cat <<EOF
+cc-run — quota-aware Claude Code runner
+
+  --threshold N        Session SOFT threshold (default 80). Finishes the current item, then stops.
+  --session-hard N     Session HARD threshold (default 95). Can fire mid-item.
+  --weekly-hard N      Weekly HARD threshold (default 98). Can fire mid-item.
+  --enable-hard-abort   Opt in to auto-revert (git stash) the in-progress item when a HARD
+                         threshold fires. Off by default — without this flag, HARD thresholds
+                         only force a clean stop, nothing is touched automatically.
+  --help                this help
+
+Task: the last argument. Plain text, or @file.md (the file's content becomes the task).
+EOF
+}
+
+TASK=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --threshold)        THRESHOLD="$2"; shift 2;;
+    --session-hard)     SESSION_HARD="$2"; shift 2;;
+    --weekly-hard)      WEEKLY_HARD="$2"; shift 2;;
+    --enable-hard-abort) HARD_ABORT=1; shift;;
+    --help|-h)           usage; exit 0;;
+    *)                   TASK="$1"; shift;;
+  esac
+done
+
+if [[ -z "$TASK" ]]; then
+  echo "Error: no task given." >&2; usage; exit 1
+fi
+if [[ "$TASK" == @* ]]; then
+  f="${TASK:1}"
+  [[ -f "$f" ]] || { echo "Error: task file not found: $f" >&2; exit 1; }
+  TASK="$(cat "$f")"
+fi
+
+command -v claude >/dev/null   || { echo "Error: 'claude' CLI not found." >&2; exit 1; }
+command -v python3 >/dev/null  || { echo "Error: python3 is required." >&2; exit 1; }
+
+export CC_SESSION_SOFT="$THRESHOLD"
+export CC_SESSION_HARD="$SESSION_HARD"
+export CC_WEEKLY_HARD="$WEEKLY_HARD"
+export CC_HARD_ABORT="$HARD_ABORT"
+
+if git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  IS_GIT=1
+else
+  IS_GIT=0
+fi
+
+if [[ "$HARD_ABORT" == "1" ]]; then
+  if [[ "$IS_GIT" == "1" ]]; then
+    echo "→ [cc-run] --enable-hard-abort is ON: a HARD threshold mid-item will run 'git stash' automatically."
+  else
+    echo "⚠️  [cc-run] --enable-hard-abort is ON but this isn't a git repo: hard-abort will fall back to a clean stop." >&2
+  fi
+else
+  echo "→ [cc-run] hard-abort is OFF (default): HARD thresholds only force a clean stop, nothing is auto-reverted."
+fi
+
+MARKER="$PROJ/.cc-quota/STOP.json"
+PROGRESS="$PROJ/.cc-quota/progress.md"
+mkdir -p "$PROJ/.cc-quota"
+
+RULES=$(cat <<EOF
+
+--- QUOTA RULES (cc-run) ---
+A two-tier "quota gate" is active:
+- SOFT threshold: you may finish the current todo item; before moving to
+  the next one you'll get an instruction to wrap up cleanly (update
+  progress.md, commit, stop).
+- HARD threshold: can fire mid-item. $( [[ "$HARD_ABORT" == "1" ]] && echo "auto-revert is ON — changes on the current item will be reverted with 'git stash' without your involvement and the item goes back to 'pending'. When you see this, do NOT commit (the revert already happened), just leave a short note and stop." || echo "auto-revert is OFF — you'll just be told to stop as safely as possible, nothing is touched automatically." )
+.cc-quota/progress.md is kept up to date in both cases; work resumes from
+there after the reset. If an item was reverted due to quota, progress.md
+says so explicitly — redo that item from scratch.
+When the ENTIRE task is done, append a line containing only "CC_QUOTA_DONE"
+to the end of .cc-quota/progress.md (this is the completion signal).
+EOF
+)
+
+# resets_at (ISO 8601) -> seconds to sleep from now. Falls back if missing.
+sleep_seconds_until() {
+  local iso="$1" fallback="$2"
+  python3 - "$iso" "$fallback" <<'PY'
+import sys, time
+from datetime import datetime, timezone
+iso, fallback = sys.argv[1], int(sys.argv[2])
+if not iso or iso == "null":
+    print(fallback); raise SystemExit
+try:
+    s = iso.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int(dt.timestamp() - time.time())
+    print(max(secs, 0))
+except Exception:
+    print(fallback)
+PY
+}
+
+is_done() { [[ -f "$PROGRESS" ]] && grep -q '^CC_QUOTA_DONE' "$PROGRESS"; }
+
+ITER=0
+while true; do
+  ITER=$((ITER+1))
+  rm -f "$MARKER"
+
+  if [[ $ITER -eq 1 ]]; then
+    echo "▶️  [cc-run] Starting (soft %$THRESHOLD, hard-session %$SESSION_HARD, hard-weekly %$WEEKLY_HARD)"
+    PROMPT="$TASK"$'\n'"$RULES"
+    claude $CLAUDE_ARGS -p "$PROMPT" || true
+  else
+    echo "▶️  [cc-run] Resuming where it left off (round $ITER)"
+    RESUME_PROMPT="Read .cc-quota/progress.md. If an item was reverted due to quota (back to pending), redo it FROM SCRATCH; then continue the remaining tasks from where you left off.${RULES}"
+    claude $CLAUDE_ARGS -c -p "$RESUME_PROMPT" || true
+  fi
+
+  if is_done; then
+    echo "✅ [cc-run] Task complete (CC_QUOTA_DONE)."
+    break
+  fi
+
+  if [[ -f "$MARKER" ]]; then
+    MODE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("mode","soft"))' "$MARKER" 2>/dev/null || echo "soft")
+    WINDOW=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("window",""))' "$MARKER" 2>/dev/null || echo "")
+    RESETS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("resets_at") or "")' "$MARKER" 2>/dev/null || echo "")
+    ABORTED=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("aborted_item") or "")' "$MARKER" 2>/dev/null || echo "")
+    # 5-hour fallback for session, 1-hour fallback for weekly if resets_at is missing.
+    FALLBACK=$([[ "$WINDOW" == "session" ]] && echo 18000 || echo 3600)
+    SECS=$(sleep_seconds_until "$RESETS" "$FALLBACK")
+    SECS=$((SECS + BUFFER_SECONDS))
+    WAKE=$(python3 -c 'import sys,datetime;print((datetime.datetime.now()+datetime.timedelta(seconds=int(sys.argv[1]))).strftime("%Y-%m-%d %H:%M:%S"))' "$SECS")
+    if [[ "$MODE" == "hard" && -n "$ABORTED" ]]; then
+      echo "⏸️  [cc-run] HARD quota threshold ($WINDOW). '${ABORTED}' was reverted. Reset: ${RESETS:-unknown}. Sleeping ${SECS}s → resuming ~$WAKE."
+    else
+      echo "⏸️  [cc-run] Quota threshold ($WINDOW, mode=$MODE). Reset: ${RESETS:-unknown}. Sleeping ${SECS}s → resuming ~$WAKE."
+    fi
+    sleep "$SECS"
+    continue
+  fi
+
+  # No marker, no done signal: Claude finished the round on its own or errored out. Stop the loop.
+  echo "ℹ️  [cc-run] No STOP marker and no DONE signal — Claude ended the turn on its own. Stopping."
+  echo "    (If you expected it to continue, check .cc-quota/progress.md and the terminal output.)"
+  break
+done

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
+  "name": "cc-quota-guard",
+  "owner": {
+    "name": "cc-quota-guard contributors",
+    "url": "https://github.com/BunyaminGP/cc-quota-guard"
+  },
+  "description": "Quota-aware wrapper and hooks for Claude Code.",
+  "plugins": [
+    {
+      "name": "cc-quota-guard",
+      "source": "./",
+      "description": "Stop Claude Code at a clean checkpoint before you hit your usage limit; optionally auto-revert an in-progress todo item on a hard threshold."
+    }
+  ]
+}

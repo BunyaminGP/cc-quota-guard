@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "cc-quota-guard",
+  "displayName": "cc-quota-guard",
+  "description": "Quota-aware Claude Code: stop at a clean checkpoint before you hit your usage limit, and optionally auto-revert an in-progress todo item if you blow through a hard threshold.",
+  "version": "0.1.0",
+  "author": {
+    "name": "cc-quota-guard contributors"
+  },
+  "homepage": "https://github.com/BunyaminGP/cc-quota-guard",
+  "repository": "https://github.com/BunyaminGP/cc-quota-guard",
+  "license": "MIT",
+  "keywords": ["quota", "rate-limit", "usage", "hooks", "automation", "todo"]
+}

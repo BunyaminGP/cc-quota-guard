@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["~/.claude/cc-quota-guard/scripts/quota_gate.py"],
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["~/.claude/cc-quota-guard/scripts/quota_gate.py"],
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
