@@ -16,17 +16,23 @@ What happens at the hard threshold depends on `hard_abort_enabled`
     (commit if you can, don't start anything new) — same spirit as the
     soft stop, just triggered mid-item instead of at a boundary. No files
     are touched automatically.
-  - enabled (opt-in via CC_HARD_ABORT=1 or .cc-quota/config.json
-    `"hard_abort_enabled": true`): if a todo item is in_progress, ALL
-    changes made on that item are reverted with `git stash`, the item is
-    marked 'pending' again, and it gets redone from scratch after the
-    quota resets.
+  - enabled (opt-in via CC_HARD_ABORT=1, or the plugin's own userConfig
+    screen): if a todo item is in_progress, ALL changes made on that item
+    are reverted with `git stash`, the item is marked 'pending' again, and
+    it gets redone from scratch after the quota resets.
 
 Why is auto-revert opt-in? This hook is meant to be installed by people
 who didn't write it. Automatically running `git stash` on someone's
 working tree is a reasonable thing to opt into, not a reasonable default
 for a stranger who just ran `/plugin install`. Read the README before
 turning it on.
+
+hard_abort_enabled can ONLY be turned on by something the user themselves
+controls (an env var they set, or the plugin's configure screen) — never by
+`.cc-quota/config.json`, because that file lives inside the project and can
+arrive already committed in a repo someone else wrote or you just cloned.
+The percentage thresholds ARE safe to read from config.json: they only
+change *when* you stop, never *whether* a destructive-ish action happens.
 
 FAIL-OPEN: if usage can't be read (API down, no token, schema changed),
 Claude is NEVER blocked. Likewise, if git is unavailable or fails, revert
@@ -38,9 +44,10 @@ wasn't committed before the next one started, `git stash` will also sweep
 up that earlier uncommitted work. This is a known limitation (see
 README).
 
-Config precedence (highest wins): CC_* env vars > .cc-quota/config.json >
-plugin userConfig (the install-time configuration screen) > built-in
-defaults. See _load_config() for details.
+Config precedence for the percentage thresholds (highest wins): CC_* env
+vars > .cc-quota/config.json > plugin userConfig > built-in defaults.
+hard_abort_enabled uses the same order MINUS .cc-quota/config.json, which
+is deliberately never consulted for it (see above). See _load_config().
 """
 
 import json
@@ -48,6 +55,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -116,6 +124,14 @@ def _load_config(proj):
     if os.environ.get("CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED") not in (None, ""):
         cfg["hard_abort_enabled"] = _truthy(os.environ["CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED"])
 
+    # NOTE: hard_abort_enabled is deliberately NOT read from config.json.
+    # That file lives inside the project and can arrive already committed
+    # in a repo you clone — it must never be able to silently turn on
+    # automatic `git stash` on your behalf. Only a value YOU set yourself
+    # (CC_HARD_ABORT env var, or the plugin's own userConfig screen) can do
+    # that. Only the percentage thresholds are safe to let a project tune,
+    # since they change *when* you stop, never *whether* something
+    # destructive-ish happens.
     cfg_path = os.path.join(_quota_dir(proj), "config.json")
     try:
         with open(cfg_path) as f:
@@ -123,8 +139,6 @@ def _load_config(proj):
         for k in ("session_soft", "session_hard", "weekly_hard"):
             if k in fc:
                 cfg[k] = float(fc[k])
-        if "hard_abort_enabled" in fc:
-            cfg["hard_abort_enabled"] = bool(fc["hard_abort_enabled"])
     except Exception:
         pass
 
@@ -226,6 +240,31 @@ def _write_marker(proj, data):
     os.makedirs(_quota_dir(proj), exist_ok=True)
     with open(_marker_path(proj), "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _marker_still_valid(proj):
+    """A STOP.json marker only short-circuits the checks below while we're
+    still inside the quota window it declared (cc-run is asleep, waiting
+    for `resets_at`). A marker whose `resets_at` has already passed — or
+    that's missing/malformed — is stale: either cc-run resumed without
+    cleaning it up, or the file shipped with the project (e.g. committed by
+    someone else, or by an untrusted repo) rather than being written by
+    this hook just now. A stale/foreign marker must NOT be trusted to
+    silently and permanently disable the guard, so we treat it as absent.
+    """
+    try:
+        with open(_marker_path(proj)) as f:
+            data = json.load(f)
+        resets_at = data.get("resets_at")
+        if not resets_at:
+            return False
+        s = str(resets_at).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt > datetime.now(timezone.utc)
+    except Exception:
+        return False
 
 
 # --------------------------------------------------------------------------- hard threshold
@@ -364,9 +403,18 @@ def main():
     proj = _project_dir(hook_input)
     cfg = _load_config(proj)
 
-    # Already stopped (marker exists) — don't block repeatedly and create a loop.
+    # Already stopped and still within that stop's quota window — don't
+    # block repeatedly and create a loop while cc-run is asleep waiting for
+    # the reset. A marker that's stale (past its resets_at) or foreign
+    # (shipped with the project instead of written by this run) is ignored
+    # and removed instead of trusted — see _marker_still_valid().
     if os.path.exists(_marker_path(proj)):
-        _allow()
+        if _marker_still_valid(proj):
+            _allow()
+        try:
+            os.remove(_marker_path(proj))
+        except Exception:
+            pass
 
     tool_name = hook_input.get("tool_name") or hook_input.get("tool") or ""
     tool_input = hook_input.get("tool_input") or {}

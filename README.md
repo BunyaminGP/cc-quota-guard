@@ -151,6 +151,22 @@ just installed. A few things to know before you turn it on:
   silently falls back to a clean stop — same as if you hadn't enabled it.
 - **Try it somewhere disposable first.** A scratch repo, before you trust it
   on real work.
+- **A project can't silently turn this on for you.** `hard_abort_enabled`
+  can only be set by something *you* control — the `CC_HARD_ABORT` env var,
+  or the plugin's own configure screen. It is deliberately never read from
+  `.cc-quota/config.json`, because that file lives inside the project and
+  can arrive already committed in a repo you clone. Only the percentage
+  thresholds are project-configurable, since those just change *when* you
+  stop, never *whether* something destructive-ish happens.
+- **A stale or planted `STOP.json` can't disable the guard forever.** The
+  hook only treats an existing `STOP.json` as "already stopped, don't
+  re-check" while its `resets_at` is still in the future. One that's
+  expired, malformed, or simply shipped inside a cloned project is ignored
+  and cleaned up instead of silently turning protection off.
+- **Add `.cc-quota/` to your own project's `.gitignore`.** It's local
+  runtime state (todo snapshots, stop markers), not something to commit —
+  keeping it untracked also avoids it getting swept into a `git stash` along
+  with real changes.
 
 ## Requirements
 

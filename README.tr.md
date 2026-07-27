@@ -153,6 +153,22 @@ olması makul değil. Açmadan önce bilmeniz gerekenler:
   sessizce temiz-kapanışa düşer — açmamış gibi davranır.
 - **Önce atılabilir bir yerde deneyin.** Gerçek işe güvenmeden önce bir
   scratch repo'da.
+- **Bir proje bunu sizin için sessizce açamaz.** `hard_abort_enabled`
+  sadece SİZİN kontrol ettiğiniz bir yerden ayarlanabilir — `CC_HARD_ABORT`
+  ortam değişkeni ya da plugin'in kendi yapılandırma ekranı. Bilerek
+  `.cc-quota/config.json`'dan hiç okunmuyor, çünkü o dosya projenin içinde
+  yaşıyor ve klonladığınız bir repoda zaten commit'lenmiş halde gelebilir.
+  Sadece yüzde eşikleri proje tarafından ayarlanabilir — onlar sadece NE
+  ZAMAN durduğunuzu değiştirir, yıkıcı bir şeyin olup olmayacağını değil.
+- **Eski/bırakılmış bir `STOP.json` korumayı sonsuza kadar kapatamaz.** Hook,
+  var olan bir `STOP.json`'ı sadece `resets_at` hâlâ gelecekteyken "zaten
+  durduk, tekrar kontrol etme" olarak sayıyor. Süresi geçmiş, bozuk ya da
+  klonlanan projeyle birlikte gelen biri yok sayılıp temizleniyor — korumayı
+  sessizce kapatamıyor.
+- **Kendi projenizin `.gitignore`'una `.cc-quota/` ekleyin.** Bu, yerel
+  çalışma zamanı durumu (todo anlık görüntüleri, stop işaretçileri) —
+  commit'lenecek bir şey değil; izlenmemesi ayrıca gerçek değişikliklerle
+  birlikte `git stash`'e sürüklenmesini de önler.
 
 ## Gereksinimler
 
