@@ -46,6 +46,28 @@ project scope'una kurun:
 claude plugin install cc-quota-guard --scope project
 ```
 
+### Yapılandırma ekranı
+
+Plugin'i etkinleştirdiğinizde Claude Code size eşikleri sorar — aracın
+gerçek "ayarlar ekranı" bu, plugin'in `userConfig` alanı üzerinden
+tanımlanıyor:
+
+- **Yumuşak eşik — session (%)** — varsayılan 80
+- **Sert eşik — session (%)** — varsayılan 95
+- **Sert eşik — haftalık (%)** — varsayılan 98
+- **Sert eşikte otomatik geri almayı (git stash) aç** — varsayılan kapalı
+
+Sonradan, yeniden kurmadan değiştirmek için:
+
+```
+claude plugin install cc-quota-guard --config session_soft=70 --config hard_abort_enabled=true
+```
+
+(değiştirmek istediğiniz her alan için `--config key=value` tekrarlayın),
+ya da bir oturum içinde `/plugin` yazıp plugin için "configure" seçeneğini
+kullanın. Değerler plugin'in dosyalarında değil, kendi
+`~/.claude/settings.json`'ınızda `pluginConfigs` altında saklanır.
+
 **Fallback — manuel kurulum** (plugin sistemi olmayan eski Claude Code
 sürümleri için):
 
@@ -179,7 +201,20 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
 - **Plan.** Usage endpoint Pro/Max'te çalışır. Farklı bir planda `--probe`
   boş/farklı dönebilir.
 
-## Ayarlar (ortam değişkenleri)
+## Ayarlar
+
+Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
+**her biri altındakini ezer**:
+
+1. **`CC_*` ortam değişkenleri** — açık, tek seferlik override (`cc-run`
+   bayraklarını elle verdiğinizde ya da manuel `export` ile)
+2. **`.cc-quota/config.json`** (proje bazlı) — `session_soft`,
+   `session_hard`, `weekly_hard`, `hard_abort_enabled` anahtarları
+3. **Plugin'in yapılandırma ekranı** (yukarıda) — 1 ya da 2'yi vermediğiniz
+   her yerde geçerli olan kişisel varsayılanınız
+
+Üçü de hiçbir yerde ayarlanmadıysa sabit varsayılan devreye girer: 80 / 95
+/ 98 / geri alma kapalı.
 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
@@ -190,10 +225,6 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
 | `CC_USAGE_CACHE_TTL` | 30 | Kota cache süresi (sn) — aynı zamanda sert eşik tespit gecikmesi |
 | `CC_RESUME_BUFFER` | 60 | Reset sonrası ek bekleme (sn) |
 | `CC_CLAUDE_ARGS` | `--permission-mode acceptEdits` | `claude`'a geçilecek ekstra bayraklar |
-
-Proje bazlı `.cc-quota/config.json` da çalışır: `session_soft`,
-`session_hard`, `weekly_hard`, `hard_abort_enabled` anahtarlarıyla — ortam
-değişkenleri buna göre önceliklidir.
 
 ## Kaldırma
 

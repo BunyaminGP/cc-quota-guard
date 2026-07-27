@@ -10,11 +10,17 @@
 #     in-progress item with `git stash` and redo it from scratch after reset
 #     — see README before turning this on, it rewrites your working tree.
 #
+# Flags are only exported as CC_* env vars when you actually pass them. If
+# you don't pass a flag, quota_gate.py falls back to (in order): your
+# project's .cc-quota/config.json, the values you picked in the plugin's
+# install/configure screen, then the built-in defaults above. Passing a flag
+# here always wins over all of those, for this run only.
+#
 # Flow:
-#   1) Starts Claude with the task (thresholds passed as env vars).
+#   1) Starts Claude with the task (thresholds passed as env vars, if given).
 #   2) The quota_gate hook (installed on TodoWrite + every tool) stops Claude
 #      when a threshold is hit (soft: clean stop; hard: clean stop, or
-#      revert+stop if --enable-hard-abort) and leaves .cc-quota/STOP.json.
+#      revert+stop if hard-abort is enabled) and leaves .cc-quota/STOP.json.
 #   3) This script reads the reset time from STOP.json, SLEEPS until then,
 #      removes the marker, and resumes with `claude -c`.
 #   4) When Claude finishes the whole task it writes "CC_QUOTA_DONE" into
@@ -23,14 +29,15 @@
 # Usage:
 #   cc-run --threshold 80 --session-hard 95 --weekly-hard 98 "the task..."
 #   cc-run --enable-hard-abort @task.md
+#   cc-run "the task..."   # use whatever plugin/project config says (or built-in defaults)
 #
 # Requires: bash, python3, claude (CLI). The hard-abort revert also requires git.
 set -euo pipefail
 
-THRESHOLD=80
-SESSION_HARD=95
-WEEKLY_HARD=98
-HARD_ABORT=0
+THRESHOLD=""
+SESSION_HARD=""
+WEEKLY_HARD=""
+HARD_ABORT=""
 BUFFER_SECONDS="${CC_RESUME_BUFFER:-60}"
 # So Claude can keep editing headlessly across resumes without asking for
 # approval each time. WARNING: acceptEdits lets Claude make file edits
@@ -43,13 +50,17 @@ usage() {
   cat <<EOF
 cc-run — quota-aware Claude Code runner
 
-  --threshold N        Session SOFT threshold (default 80). Finishes the current item, then stops.
-  --session-hard N     Session HARD threshold (default 95). Can fire mid-item.
-  --weekly-hard N      Weekly HARD threshold (default 98). Can fire mid-item.
-  --enable-hard-abort   Opt in to auto-revert (git stash) the in-progress item when a HARD
-                         threshold fires. Off by default — without this flag, HARD thresholds
-                         only force a clean stop, nothing is touched automatically.
+  --threshold N        Session SOFT threshold (default 80 if not set anywhere else). Finishes the current item, then stops.
+  --session-hard N     Session HARD threshold (default 95 if not set anywhere else). Can fire mid-item.
+  --weekly-hard N      Weekly HARD threshold (default 98 if not set anywhere else). Can fire mid-item.
+  --enable-hard-abort   Force auto-revert (git stash) ON for this run when a HARD threshold fires.
+                         If you don't pass this, hard-abort follows your plugin/project
+                         configuration (built-in default: off).
   --help                this help
+
+None of these flags are required — without them, thresholds come from your
+project's .cc-quota/config.json, then the plugin's configure screen, then
+the built-in defaults (80 / 95 / 98 / hard-abort off).
 
 Task: the last argument. Plain text, or @file.md (the file's content becomes the task).
 EOF
@@ -61,7 +72,7 @@ while [[ $# -gt 0 ]]; do
     --threshold)        THRESHOLD="$2"; shift 2;;
     --session-hard)     SESSION_HARD="$2"; shift 2;;
     --weekly-hard)      WEEKLY_HARD="$2"; shift 2;;
-    --enable-hard-abort) HARD_ABORT=1; shift;;
+    --enable-hard-abort) HARD_ABORT="1"; shift;;
     --help|-h)           usage; exit 0;;
     *)                   TASK="$1"; shift;;
   esac
@@ -79,10 +90,13 @@ fi
 command -v claude >/dev/null   || { echo "Error: 'claude' CLI not found." >&2; exit 1; }
 command -v python3 >/dev/null  || { echo "Error: python3 is required." >&2; exit 1; }
 
-export CC_SESSION_SOFT="$THRESHOLD"
-export CC_SESSION_HARD="$SESSION_HARD"
-export CC_WEEKLY_HARD="$WEEKLY_HARD"
-export CC_HARD_ABORT="$HARD_ABORT"
+# Only export what was actually passed on the command line — an unset var
+# here lets quota_gate.py fall through to project config / plugin config /
+# built-in defaults instead of being silently overridden by this script.
+[[ -n "$THRESHOLD" ]]    && export CC_SESSION_SOFT="$THRESHOLD"
+[[ -n "$SESSION_HARD" ]] && export CC_SESSION_HARD="$SESSION_HARD"
+[[ -n "$WEEKLY_HARD" ]]  && export CC_WEEKLY_HARD="$WEEKLY_HARD"
+[[ "$HARD_ABORT" == "1" ]] && export CC_HARD_ABORT="1"
 
 if git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   IS_GIT=1
@@ -92,12 +106,12 @@ fi
 
 if [[ "$HARD_ABORT" == "1" ]]; then
   if [[ "$IS_GIT" == "1" ]]; then
-    echo "→ [cc-run] --enable-hard-abort is ON: a HARD threshold mid-item will run 'git stash' automatically."
+    echo "→ [cc-run] --enable-hard-abort passed: hard-abort is ON for this run (git stash on a HARD threshold)."
   else
-    echo "⚠️  [cc-run] --enable-hard-abort is ON but this isn't a git repo: hard-abort will fall back to a clean stop." >&2
+    echo "⚠️  [cc-run] --enable-hard-abort passed but this isn't a git repo: hard-abort will fall back to a clean stop." >&2
   fi
 else
-  echo "→ [cc-run] hard-abort is OFF (default): HARD thresholds only force a clean stop, nothing is auto-reverted."
+  echo "→ [cc-run] hard-abort not forced here — using your plugin/project configuration (built-in default: off)."
 fi
 
 MARKER="$PROJ/.cc-quota/STOP.json"
@@ -111,7 +125,7 @@ A two-tier "quota gate" is active:
 - SOFT threshold: you may finish the current todo item; before moving to
   the next one you'll get an instruction to wrap up cleanly (update
   progress.md, commit, stop).
-- HARD threshold: can fire mid-item. $( [[ "$HARD_ABORT" == "1" ]] && echo "auto-revert is ON — changes on the current item will be reverted with 'git stash' without your involvement and the item goes back to 'pending'. When you see this, do NOT commit (the revert already happened), just leave a short note and stop." || echo "auto-revert is OFF — you'll just be told to stop as safely as possible, nothing is touched automatically." )
+- HARD threshold: can fire mid-item. $( if [[ "$HARD_ABORT" == "1" ]]; then echo "auto-revert is ON for this run — changes on the current item will be reverted with 'git stash' without your involvement and the item goes back to 'pending'. When you see this, do NOT commit (the revert already happened), just leave a short note and stop."; else echo "auto-revert wasn't forced on for this run; whether it fires depends on your plugin/project configuration (default: off, meaning you'll just be told to stop as safely as possible). If a message tells you changes were reverted, do NOT commit — just leave a short note and stop."; fi )
 .cc-quota/progress.md is kept up to date in both cases; work resumes from
 there after the reset. If an item was reverted due to quota, progress.md
 says so explicitly — redo that item from scratch.
@@ -149,7 +163,7 @@ while true; do
   rm -f "$MARKER"
 
   if [[ $ITER -eq 1 ]]; then
-    echo "▶️  [cc-run] Starting (soft %$THRESHOLD, hard-session %$SESSION_HARD, hard-weekly %$WEEKLY_HARD)"
+    echo "▶️  [cc-run] Starting (soft=${THRESHOLD:-default}%, hard-session=${SESSION_HARD:-default}%, hard-weekly=${WEEKLY_HARD:-default}%)"
     PROMPT="$TASK"$'\n'"$RULES"
     claude $CLAUDE_ARGS -p "$PROMPT" || true
   else

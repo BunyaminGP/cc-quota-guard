@@ -38,7 +38,9 @@ wasn't committed before the next one started, `git stash` will also sweep
 up that earlier uncommitted work. This is a known limitation (see
 README).
 
-Config precedence: environment variables > .cc-quota/config.json > defaults.
+Config precedence (highest wins): CC_* env vars > .cc-quota/config.json >
+plugin userConfig (the install-time configuration screen) > built-in
+defaults. See _load_config() for details.
 """
 
 import json
@@ -82,12 +84,38 @@ def _truthy(v):
 
 
 def _load_config(proj):
+    """
+    Precedence, lowest to highest (each step overrides the previous one):
+      1. built-in fallback defaults
+      2. plugin userConfig — the values the user picked in the install/
+         configure screen (CLAUDE_PLUGIN_OPTION_* env vars, set by Claude
+         Code itself when this hook runs as part of the plugin)
+      3. .cc-quota/config.json — per-project override
+      4. CC_* environment variables — an explicit, one-off override (e.g.
+         cc-run flags the user actually passed, or a manual `export`)
+    """
     cfg = {
         "session_soft": 80.0,
         "session_hard": 95.0,
         "weekly_hard": 98.0,
         "hard_abort_enabled": False,
     }
+
+    plugin_option_map = {
+        "CLAUDE_PLUGIN_OPTION_SESSION_SOFT": "session_soft",
+        "CLAUDE_PLUGIN_OPTION_SESSION_HARD": "session_hard",
+        "CLAUDE_PLUGIN_OPTION_WEEKLY_HARD": "weekly_hard",
+    }
+    for env, key in plugin_option_map.items():
+        v = os.environ.get(env)
+        if v not in (None, ""):
+            try:
+                cfg[key] = float(v)
+            except ValueError:
+                pass
+    if os.environ.get("CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED") not in (None, ""):
+        cfg["hard_abort_enabled"] = _truthy(os.environ["CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED"])
+
     cfg_path = os.path.join(_quota_dir(proj), "config.json")
     try:
         with open(cfg_path) as f:
@@ -99,6 +127,7 @@ def _load_config(proj):
             cfg["hard_abort_enabled"] = bool(fc["hard_abort_enabled"])
     except Exception:
         pass
+
     env_map = {
         "CC_SESSION_SOFT": "session_soft",
         "CC_SESSION_HARD": "session_hard",

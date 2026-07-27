@@ -44,6 +44,28 @@ your team via version control:
 claude plugin install cc-quota-guard --scope project
 ```
 
+### Configuration screen
+
+When you enable the plugin, Claude Code prompts you for the thresholds —
+this is the actual "settings screen" for the tool, declared via the
+plugin's `userConfig`:
+
+- **Soft threshold — session (%)** — default 80
+- **Hard threshold — session (%)** — default 95
+- **Hard threshold — weekly (%)** — default 98
+- **Enable auto-revert (git stash) on the hard threshold** — default off
+
+To change these later without reinstalling:
+
+```
+claude plugin install cc-quota-guard --config session_soft=70 --config hard_abort_enabled=true
+```
+
+(repeat `--config key=value` for each field you want to change), or run
+`/plugin` inside a session and use its configure action for the plugin. The
+values are stored in your own `~/.claude/settings.json` under
+`pluginConfigs`, never in the plugin's files.
+
 **Fallback — manual install** (for Claude Code versions without the plugin
 system):
 
@@ -178,7 +200,20 @@ Anthropic likely changed the schema — update the field names in
 - **Plan.** The usage endpoint works on Pro/Max. On a different plan,
   `--probe` may return nothing or something different.
 
-## Settings (environment variables)
+## Settings
+
+There are three places to set the thresholds, checked in this order —
+**each one overrides the ones below it**:
+
+1. **`CC_*` environment variables** — an explicit, one-off override (what
+   `cc-run` flags set when you actually pass them, or a manual `export`)
+2. **`.cc-quota/config.json`** (per-project) — keys `session_soft`,
+   `session_hard`, `weekly_hard`, `hard_abort_enabled`
+3. **The plugin's configuration screen** (see above) — your personal
+   defaults, used everywhere you don't set 1 or 2
+
+If none of the three are set anywhere, the built-in fallback is 80 / 95 / 98
+/ hard-abort off.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -189,10 +224,6 @@ Anthropic likely changed the schema — update the field names in
 | `CC_USAGE_CACHE_TTL` | 30 | Usage cache lifetime (s) — also the hard-threshold detection lag |
 | `CC_RESUME_BUFFER` | 60 | Extra sleep after the reset time (s) |
 | `CC_CLAUDE_ARGS` | `--permission-mode acceptEdits` | Extra flags passed to `claude` |
-
-`.cc-quota/config.json` (per-project) works too, with keys `session_soft`,
-`session_hard`, `weekly_hard`, `hard_abort_enabled` — environment variables
-take priority over it.
 
 ## Uninstall
 

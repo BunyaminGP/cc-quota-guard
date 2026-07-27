@@ -3,12 +3,44 @@
   "name": "cc-quota-guard",
   "displayName": "cc-quota-guard",
   "description": "Quota-aware Claude Code: stop at a clean checkpoint before you hit your usage limit, and optionally auto-revert an in-progress todo item if you blow through a hard threshold.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "cc-quota-guard contributors"
   },
   "homepage": "https://github.com/BunyaminGP/cc-quota-guard",
   "repository": "https://github.com/BunyaminGP/cc-quota-guard",
   "license": "MIT",
-  "keywords": ["quota", "rate-limit", "usage", "hooks", "automation", "todo"]
+  "keywords": ["quota", "rate-limit", "usage", "hooks", "automation", "todo"],
+  "userConfig": {
+    "session_soft": {
+      "type": "number",
+      "title": "Soft threshold — 5-hour session (%)",
+      "description": "At this usage %, Claude finishes the current todo item, then stops cleanly (commits, writes progress notes).",
+      "default": 80,
+      "min": 1,
+      "max": 100
+    },
+    "session_hard": {
+      "type": "number",
+      "title": "Hard threshold — 5-hour session (%)",
+      "description": "At this usage %, Claude can be stopped mid-item. With auto-revert off (default) this just forces a clean stop; with it on, the in-progress item is reverted with git stash.",
+      "default": 95,
+      "min": 1,
+      "max": 100
+    },
+    "weekly_hard": {
+      "type": "number",
+      "title": "Hard threshold — weekly (%)",
+      "description": "Same as the session hard threshold, but for the 7-day weekly quota.",
+      "default": 98,
+      "min": 1,
+      "max": 100
+    },
+    "hard_abort_enabled": {
+      "type": "boolean",
+      "title": "Enable auto-revert (git stash) on the hard threshold",
+      "description": "Off by default. When on, a hard threshold hit mid-item automatically reverts that item's changes with git stash and redoes it after the quota resets. Read the README's Safety section before enabling this.",
+      "default": false
+    }
+  }
 }
