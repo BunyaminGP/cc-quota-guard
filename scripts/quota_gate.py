@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
 quota_gate.py — Claude Code PostToolUse hook. Registered on a single "*"
-matcher (every tool call); it distinguishes TodoWrite calls internally via
-`tool_name` rather than needing a second matcher registration:
+matcher (every tool call); it distinguishes planning-tool calls internally
+via `tool_name` rather than needing a second matcher registration:
 
-  - On a TodoWrite call: records the todo list to
-    `.cc-quota/todos_state.json` (which item is in_progress, and which git
-    commit it started from) and checks the SOFT threshold (finish the
-    current item, then stop cleanly).
+  - On a TodoWrite call — OR, on Claude Code versions that plan this way
+    instead, a TaskCreate/TaskUpdate/TaskList call — records the task list
+    to `.cc-quota/todos_state.json` (which item is in_progress, and which
+    git commit it started from) and checks the SOFT threshold (finish the
+    current item, then stop cleanly). Supporting both tool families matters
+    because they're not interchangeable at the API level: TodoWrite sends
+    the whole list, with statuses, in one call every time; TaskCreate/
+    TaskUpdate are granular CRUD calls spread over many tool calls, with no
+    single call carrying the full picture — see _save_task_tool_state().
+    Recognizing only one of these two families means the SOFT threshold and
+    the in_progress bookkeeping (used for hard-abort revert) silently never
+    fire on whichever family isn't recognized, no matter how high usage
+    gets, since the specific call being watched for simply never happens.
   - On EVERY call: checks the HARD thresholds. A todo item's own work (many
     Edit/Bash/Write calls) can span a long stretch of time after a single
-    TodoWrite call — if we only checked at TodoWrite time, a quota spike in
+    planning-tool call — if we only checked there, a quota spike in
     between would be caught far too late.
 
 What happens at the hard threshold depends on `hard_abort_enabled`
@@ -297,6 +306,14 @@ def _write_todos_state(proj, state):
     os.replace(tmp, _todos_state_path(proj))
 
 
+def _new_in_progress(proj, content, is_git):
+    checkpoint = None
+    if is_git:
+        code, out, _ = _git(proj, "rev-parse", "HEAD")
+        checkpoint = out if code == 0 else None
+    return {"content": content, "checkpoint_commit": checkpoint, "started_at": int(time.time())}
+
+
 def _save_todos_state(proj, todos, is_git):
     """On a TodoWrite call, records the todo list; if a new item just became
     in_progress, notes the checkpoint commit (if any)."""
@@ -310,15 +327,71 @@ def _save_todos_state(proj, todos, is_git):
     elif prev_in_progress and prev_in_progress.get("content") == in_progress_todo.get("content"):
         state["in_progress"] = prev_in_progress  # same item still running, keep checkpoint
     else:
-        checkpoint = None
-        if is_git:
-            code, out, _ = _git(proj, "rev-parse", "HEAD")
-            checkpoint = out if code == 0 else None
-        state["in_progress"] = {
-            "content": in_progress_todo.get("content"),
-            "checkpoint_commit": checkpoint,
-            "started_at": int(time.time()),
-        }
+        state["in_progress"] = _new_in_progress(proj, in_progress_todo.get("content"), is_git)
+    _write_todos_state(proj, state)
+    return state
+
+
+def _save_task_tool_state(proj, tool_name, tool_input, tool_response, is_git):
+    """
+    Equivalent of _save_todos_state(), but for Claude Code's newer
+    TaskCreate/TaskUpdate/TaskList tools rather than TodoWrite.
+
+    Some Claude Code versions plan with this tool family INSTEAD of
+    TodoWrite — if this hook only ever recognized TodoWrite, the SOFT
+    threshold (gated on `tool_name == "TodoWrite"`) and the in_progress
+    bookkeeping used for hard-abort revert would silently never fire on
+    those versions, no matter how high usage got, since the one call it was
+    watching for would simply never happen.
+
+    Unlike TodoWrite (one call, the whole list, every time), these are
+    granular CRUD calls spread over many tool calls, so state is built up
+    incrementally here rather than replaced wholesale each time — except
+    for TaskList, which does return the full list and is used as an
+    opportunistic full resync when Claude happens to call it.
+    """
+    prev = _read_todos_state(proj) or {}
+    todos = [dict(t) for t in (prev.get("todos") or [])]
+    in_progress = prev.get("in_progress")
+
+    def find(task_id):
+        return next((t for t in todos if t.get("id") == task_id), None)
+
+    if tool_name == "TaskCreate":
+        task = (tool_response or {}).get("task") or {}
+        task_id = task.get("id")
+        subject = task.get("subject") or tool_input.get("subject")
+        if task_id is not None and find(task_id) is None:
+            todos.append({"id": task_id, "content": subject, "status": "pending"})
+
+    elif tool_name == "TaskUpdate":
+        task_id = (tool_response or {}).get("taskId") or tool_input.get("taskId")
+        new_status = ((tool_response or {}).get("statusChange") or {}).get("to") or tool_input.get("status")
+        entry = find(task_id) if task_id is not None else None
+        if entry is None and task_id is not None:
+            # A TaskUpdate for a task we never saw a TaskCreate for (e.g.
+            # created before this hook started tracking it) — start
+            # tracking it now rather than dropping the update.
+            entry = {"id": task_id, "content": tool_input.get("subject") or f"task {task_id}", "status": "pending"}
+            todos.append(entry)
+        if entry is not None and new_status:
+            entry["status"] = new_status
+            if new_status == "in_progress":
+                in_progress = _new_in_progress(proj, entry.get("content"), is_git)
+            elif in_progress and in_progress.get("content") == entry.get("content"):
+                in_progress = None  # the in-progress task finished/was deleted/etc.
+
+    elif tool_name == "TaskList":
+        tasks = (tool_response or {}).get("tasks")
+        if tasks is not None:
+            todos = [{"id": t.get("id"), "content": t.get("subject"), "status": t.get("status")} for t in tasks]
+            still_running = next((t for t in todos if t.get("status") == "in_progress"), None)
+            if still_running is None:
+                in_progress = None
+            elif not (in_progress and in_progress.get("content") == still_running.get("content")):
+                in_progress = _new_in_progress(proj, still_running.get("content"), is_git)
+
+    state = {"todos": todos, "in_progress": in_progress, "updated_at": int(time.time())}
     _write_todos_state(proj, state)
     return state
 
@@ -561,13 +634,20 @@ def main():
 
     tool_name = hook_input.get("tool_name") or hook_input.get("tool") or ""
     tool_input = hook_input.get("tool_input") or {}
+    tool_response = hook_input.get("tool_response") or {}
     is_git = _is_git_repo(proj)
 
+    # Some Claude Code versions plan with TaskCreate/TaskUpdate/TaskList
+    # instead of TodoWrite. If this only ever recognized TodoWrite, the SOFT
+    # threshold and in_progress bookkeeping would silently never fire on
+    # those versions — see _save_task_tool_state()'s docstring.
     state = _read_todos_state(proj)
     if tool_name == "TodoWrite":
         todos = tool_input.get("todos") or []
         if todos:
             state = _save_todos_state(proj, todos, is_git)
+    elif tool_name in ("TaskCreate", "TaskUpdate", "TaskList"):
+        state = _save_task_tool_state(proj, tool_name, tool_input, tool_response, is_git)
 
     if usage is None:
         _allow()  # fail-open: module couldn't be imported
@@ -592,8 +672,11 @@ def main():
         _do_hard_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_hard"],
                       _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"])
 
-    # SOFT threshold — only checked at item boundaries (TodoWrite calls).
-    if tool_name == "TodoWrite" and s_pct is not None and s_pct >= cfg["session_soft"]:
+    # SOFT threshold — only checked at item boundaries: a TodoWrite call, or
+    # (on Claude Code versions that plan this way instead) a
+    # TaskCreate/TaskUpdate/TaskList call.
+    if tool_name in ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList") \
+            and s_pct is not None and s_pct >= cfg["session_soft"]:
         _do_soft_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_soft"])
 
     _allow()

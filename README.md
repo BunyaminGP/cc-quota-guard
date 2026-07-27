@@ -159,15 +159,19 @@ auto-revert.
 ## How it works
 
 1. **Hook** (`scripts/quota_gate.py`) — registered on a single `PostToolUse`
-   `*` matcher (every tool call); it distinguishes `TodoWrite` calls
+   `*` matcher (every tool call); it distinguishes planning-tool calls
    internally rather than needing a second matcher registration:
-   - On a `TodoWrite` call: records which item is `in_progress` and which
-     git commit it started from, into `.cc-quota/todos_state.json`; checks
-     the SOFT threshold.
+   - On a `TodoWrite` call — or, on Claude Code versions that plan with
+     `TaskCreate`/`TaskUpdate`/`TaskList` instead, one of those — records
+     which item is `in_progress` and which git commit it started from, into
+     `.cc-quota/todos_state.json`; checks the SOFT threshold. Both tool
+     families are recognized because they're not interchangeable: a plugin
+     that only understood one of them would have its SOFT threshold (and
+     hard-abort's in-progress tracking) silently never fire on whichever
+     Claude Code version uses the other one.
    - On **every** call: checks the HARD thresholds. A single todo item's
-     work (many Edit/Bash/Write calls) can run long after one `TodoWrite`
-     call — checking only at `TodoWrite` time would notice a quota spike far
-     too late.
+     work (many Edit/Bash/Write calls) can run long after one planning-tool
+     call — checking only there would notice a quota spike far too late.
 2. **State files**
    - `.cc-quota/progress.md` — what's done, what's next, and (if hard-abort
      fired) which item was reverted. Read on resume.

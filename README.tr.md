@@ -163,14 +163,19 @@ CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
 ## Nasıl çalışır
 
 1. **Hook** (`scripts/quota_gate.py`) — tek bir `PostToolUse` `*`
-   matcher'ına takılı (her tool çağrısı); `TodoWrite` çağrılarını ikinci bir
+   matcher'ına takılı (her tool çağrısı); planlama araçlarını ikinci bir
    matcher'a ihtiyaç duymadan kendi içinde ayırt eder:
-   - Bir `TodoWrite` çağrısında: hangi maddenin `in_progress` olduğunu ve
-     hangi commit'ten başladığını `.cc-quota/todos_state.json`'a kaydeder;
-     YUMUŞAK eşiği kontrol eder.
+   - Bir `TodoWrite` çağrısında — ya da bazı Claude Code sürümlerinin onun
+     yerine kullandığı `TaskCreate`/`TaskUpdate`/`TaskList` çağrılarından
+     birinde: hangi maddenin `in_progress` olduğunu ve hangi commit'ten
+     başladığını `.cc-quota/todos_state.json`'a kaydeder; YUMUŞAK eşiği
+     kontrol eder. İki araç ailesi de tanınıyor çünkü birbirinin yerine
+     geçmiyorlar — sadece birini tanıyan bir eklenti, diğerini kullanan bir
+     Claude Code sürümünde YUMUŞAK eşiğin (ve hard-abort'un in_progress
+     takibinin) hiç tetiklenmediğini fark bile etmezdi.
    - **Her** çağrıda: SERT eşikleri kontrol eder. Bir maddenin içindeki iş
-     (birçok Edit/Bash/Write çağrısı) tek bir `TodoWrite`'tan sonra uzun
-     sürebilir; sadece `TodoWrite`'ta bakmak bir kota patlamasını çok geç
+     (birçok Edit/Bash/Write çağrısı) tek bir planlama-aracı çağrısından
+     sonra uzun sürebilir; sadece orada bakmak bir kota patlamasını çok geç
      fark ettirir.
 2. **State dosyaları**
    - `.cc-quota/progress.md` — ne bitti, sırada ne var, ve (sert geri alma
