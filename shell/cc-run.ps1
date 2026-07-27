@@ -28,5 +28,17 @@ function cc-run {
         return
     }
     $script = Join-Path $info.installPath "bin\cc-run"
-    & $gitBash $script @args
+    # cc-run's output (rendered by scripts/stream_render.py) is UTF-8, but
+    # PowerShell's console defaults to the system codepage (e.g. cp1254 on a
+    # Turkish Windows install) when decoding a child process's stdout for
+    # display — non-ASCII characters (ş, ğ, ı, ç, ö, ü, ...) come out as
+    # mojibake even though the underlying bytes/file contents are correct.
+    # Switch to UTF-8 for this call only, then restore whatever it was.
+    $prevOutputEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        & $gitBash $script @args
+    } finally {
+        [Console]::OutputEncoding = $prevOutputEncoding
+    }
 }
