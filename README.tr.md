@@ -141,7 +141,18 @@ cc-run --threshold 80 --session-hard 95 --weekly-hard 98 @gorev.md
   kapalıdır.** Vermezseniz SERT eşik de YUMUŞAK gibi sadece temiz kapanışa
   zorlar — hiçbir şey otomatik dokunulmaz. Açmadan önce aşağıdaki
   [Güvenlik](#güvenlik--hard-abort-açmadan-önce-okuyun) bölümünü okuyun.
+- `--model AD` — hangi modelin çalışacağı (`opus`, `sonnet`, `fable`, ya da
+  tam model adı). Vermezseniz `claude` CLI'nizin kendi varsayılanı kullanılır
+  — `--model` vermeden `claude` çalıştırmakla aynı.
 - Görev: düz metin ya da `@dosya.md`.
+
+`cc-run` her turun başında **çözümlenmiş** model adını yazdırır (ör.
+`🧠 model: claude-sonnet-5`) — `opus`/`sonnet` gibi takma adlar "en son
+sürüm" demek, yani hangi tarihli spesifik modelin gerçekten çalıştığını
+görebileceğiniz tek yer burası. Ayrıca hangi tool'ların çağrıldığını ve her
+turun sonunda bir maliyet/model dökümü de gösterir. Bu, `--output-format
+stream-json`'ı `scripts/stream_render.py`'dan geçirmekle oluyor — aynı
+çalışma, ekstra maliyet yok, sadece ham metin yerine ayrıştırılmış hâli.
 
 Sadece "temiz dur" (wrapper'sız, etkileşimli oturum): hook'lar kurulu olduğu
 için normal `claude` oturumu da eşiklere gelince durur — ama otomatik devam
@@ -213,11 +224,24 @@ olması makul değil. Açmadan önce bilmeniz gerekenler:
 ## Gereksinimler
 
 - `bash`, `python3`
-- Claude Code CLI (`claude`), Pro/Max aboneliği (usage endpoint sadece bu
-  planlarda çalışır)
+- Claude Code CLI (`claude`), Pro/Max **aboneliği** (OAuth login) — bu aracın
+  okuduğu usage endpoint'i sadece bu faturalandırma modunda var
 - `~/.claude/.credentials.json` içinde geçerli bir OAuth token (Claude
   Code'a giriş yapınca otomatik oluşur)
 - `--enable-hard-abort` kullanmayı planlıyorsanız git
+
+### Bu araç, kullanım-başı ödeme (API key) faturalandırmasında hiçbir şey yapmaz
+
+Claude Code'u OAuth abonelik girişi yerine `ANTHROPIC_API_KEY` ile (ya da
+başka bir API-key tabanlı kurulumla) çalıştırıyorsanız, okunacak bir "5
+saatlik session %"si ya da "haftalık %"si zaten yok — bu kavram tamamen
+Pro/Max abonelik planlarına özgü. Hook bu durumda fail-open davranır: hata
+vermez, hiçbir şeyi de bloklamaz, sessizce hiç tetiklenmez. Bu, "zayıflatılmış
+bir koruma" değil, **sıfır koruma** demektir — araç şu an $ bazlı bir
+harcama/bütçe takibi yapmıyor (kullanım-başı ödeme için asıl karşılığı bu
+olurdu). Faturalandırma modunuz buysa ve koruma istiyorsanız lütfen bir
+issue açın — bu, OAuth usage endpoint'i yerine farklı bir mekanizma
+(belirlediğiniz bir bütçeye karşı token maliyetini takip etmek) gerektirir.
 
 ## Doğrulama / hata ayıklama
 

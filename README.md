@@ -136,7 +136,18 @@ cc-run --threshold 80 --session-hard 95 --weekly-hard 98 @task.md
   Without it, HARD thresholds just force a clean stop, same as SOFT — nothing
   is touched automatically. Read [Safety](#safety-read-this-before-enabling-hard-abort)
   below before turning this on.
+- `--model NAME` — which model to run (`opus`, `sonnet`, `fable`, or a full
+  model name). If you don't pass this, it's whatever your `claude` CLI's own
+  default is — same as running `claude` with no `--model`.
 - Task: plain text or `@file.md` (the file's contents become the task).
+
+`cc-run` prints the *resolved* model name at the start of every round (e.g.
+`🧠 model: claude-sonnet-5`) — aliases like `opus` or `sonnet` mean "latest,"
+so this is the only place you can see which specific dated model actually
+ran. It also prints which tools are being called and, at the end of each
+round, a cost/model-usage summary. This comes from piping
+`--output-format stream-json` through `scripts/stream_render.py` — same
+underlying run, no extra cost, just parsed instead of shown as raw text.
 
 Just "stop cleanly" (no wrapper, interactive session): since the hooks are
 installed, a normal `claude` session also stops cleanly at the thresholds —
@@ -208,11 +219,24 @@ just installed. A few things to know before you turn it on:
 ## Requirements
 
 - `bash`, `python3`
-- Claude Code CLI (`claude`), Pro/Max subscription (the usage endpoint only
-  works on those plans)
+- Claude Code CLI (`claude`), Pro/Max **subscription** (OAuth login) — the
+  usage endpoint this tool reads only exists for that billing mode
 - A valid OAuth token in `~/.claude/.credentials.json` (created automatically
   when you log into Claude Code)
 - git, only if you plan to use `--enable-hard-abort`
+
+### This tool does nothing on pay-as-you-go (API key) billing
+
+If you run Claude Code with `ANTHROPIC_API_KEY` set (or another API-key based
+setup) instead of an OAuth subscription login, there's no "5-hour session %"
+or "weekly %" to read at all — that concept is specific to the Pro/Max
+subscription plans. The hook fails open in that case: it doesn't error and
+it doesn't block anything, it just quietly never triggers. You get zero
+protection, not a degraded version of it — this tool doesn't currently track
+$-based spending against a budget, which is the closest equivalent for
+pay-as-you-go usage. If that's your billing mode and you want protection
+too, please open an issue — it would need a different mechanism (tracking
+token cost against a budget you set, not the OAuth usage endpoint).
 
 ## Verify / debug
 

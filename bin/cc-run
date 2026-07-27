@@ -38,6 +38,7 @@ THRESHOLD=""
 SESSION_HARD=""
 WEEKLY_HARD=""
 HARD_ABORT=""
+MODEL=""
 BUFFER_SECONDS="${CC_RESUME_BUFFER:-60}"
 # So Claude can keep editing headlessly across resumes without asking for
 # approval each time. WARNING: acceptEdits lets Claude make file edits
@@ -56,6 +57,9 @@ cc-run — quota-aware Claude Code runner
   --enable-hard-abort   Force auto-revert (git stash) ON for this run when a HARD threshold fires.
                          If you don't pass this, hard-abort follows your plugin/project
                          configuration (built-in default: off).
+  --model NAME          Model to use (alias like 'opus'/'sonnet'/'fable', or a full model
+                         name). If you don't pass this, whatever your 'claude' CLI's own
+                         default is applies (same as running 'claude' with no --model).
   --help                this help
 
 None of these flags are required — without them, thresholds come from your
@@ -73,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --session-hard)     SESSION_HARD="$2"; shift 2;;
     --weekly-hard)      WEEKLY_HARD="$2"; shift 2;;
     --enable-hard-abort) HARD_ABORT="1"; shift;;
+    --model)             MODEL="$2"; shift 2;;
     --help|-h)           usage; exit 0;;
     *)                   TASK="$1"; shift;;
   esac
@@ -97,6 +102,7 @@ command -v python3 >/dev/null  || { echo "Error: python3 is required." >&2; exit
 [[ -n "$SESSION_HARD" ]] && export CC_SESSION_HARD="$SESSION_HARD"
 [[ -n "$WEEKLY_HARD" ]]  && export CC_WEEKLY_HARD="$WEEKLY_HARD"
 [[ "$HARD_ABORT" == "1" ]] && export CC_HARD_ABORT="1"
+[[ -n "$MODEL" ]] && CLAUDE_ARGS="$CLAUDE_ARGS --model $MODEL"
 
 if git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   IS_GIT=1
@@ -114,7 +120,23 @@ else
   echo "→ [cc-run] hard-abort not forced here — using your plugin/project configuration (built-in default: off)."
 fi
 
+# Windows/Git-Bash note: bash sees paths like /c/proje/hns, but python3 here
+# is typically a native Win32 build that can't open that form at all. When
+# cygpath is available (Git Bash ships it), convert to a form python3 can
+# open; elsewhere (macOS/Linux) bash and python3 already agree on paths, so
+# this is a no-op passthrough. Every python3 call below that touches a file
+# path uses the _PY variant; bash's own file tests keep using the original.
+to_py_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+PROJ_PY="$(to_py_path "$PROJ")"
+
 MARKER="$PROJ/.cc-quota/STOP.json"
+MARKER_PY="$PROJ_PY/.cc-quota/STOP.json"
 PROGRESS="$PROJ/.cc-quota/progress.md"
 mkdir -p "$PROJ/.cc-quota"
 
@@ -131,8 +153,69 @@ there after the reset. If an item was reverted due to quota, progress.md
 says so explicitly — redo that item from scratch.
 When the ENTIRE task is done, append a line containing only "CC_QUOTA_DONE"
 to the end of .cc-quota/progress.md (this is the completion signal).
+
+--- VISIBILITY (cc-run) ---
+This runs headless — nothing you print reaches a screen except plain text
+output. So the person running this has SOME visibility instead of silence
+until the very end: right before you start each todo item, print one short
+line "-> <item>"; right after you finish one, print one short line
+"[done] <item>". Keep these to a few words each. This is in addition to,
+not instead of, your normal final summary.
 EOF
 )
+
+# Current in_progress todo item's text, for heartbeat lines (best-effort).
+# Takes the project path as argv (not embedded in the script string) so it
+# works regardless of what characters are in it.
+current_item() {
+  python3 -c "
+import json, os, sys
+try:
+    with open(os.path.join(sys.argv[1], '.cc-quota', 'todos_state.json')) as f:
+        d = json.load(f)
+    ip = d.get('in_progress')
+    print(ip['content'] if ip else '')
+except Exception:
+    print('')
+" "$PROJ_PY" 2>/dev/null
+}
+
+# Path to the stream renderer, resolved relative to this script (works
+# whether this is the plugin's cached copy or an install.sh copy — both
+# keep bin/ and scripts/ as siblings). Empty if it's missing for some
+# reason, in which case we fall back to plain text output.
+CC_RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STREAM_RENDERER="$CC_RUN_DIR/../scripts/stream_render.py"
+[[ -f "$STREAM_RENDERER" ]] || STREAM_RENDERER=""
+
+# Runs `claude <args>` in the background and prints a heartbeat line every
+# 15s while it's running, so a long silent stretch doesn't look like it
+# hung. When the stream renderer is available, output goes through
+# --output-format stream-json so we can also show which model actually ran
+# (aliases like "opus" resolve to a specific dated model) and which tool is
+# running — same underlying request, just parsed instead of printed raw.
+run_claude_with_heartbeat() {
+  if [[ -n "$STREAM_RENDERER" ]]; then
+    claude $CLAUDE_ARGS --output-format stream-json --verbose "$@" \
+      | python3 "$(to_py_path "$STREAM_RENDERER")" &
+  else
+    claude $CLAUDE_ARGS "$@" &
+  fi
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 15
+    waited=$((waited + 15))
+    local item
+    item="$(current_item)"
+    if [[ -n "$item" ]]; then
+      echo "⏳ [cc-run] still working (${waited}s) — current item: $item"
+    else
+      echo "⏳ [cc-run] still working (${waited}s)"
+    fi
+  done
+  wait "$pid" || true
+}
 
 # resets_at (ISO 8601) -> seconds to sleep from now. Falls back if missing.
 sleep_seconds_until() {
@@ -163,13 +246,13 @@ while true; do
   rm -f "$MARKER"
 
   if [[ $ITER -eq 1 ]]; then
-    echo "▶️  [cc-run] Starting (soft=${THRESHOLD:-default}%, hard-session=${SESSION_HARD:-default}%, hard-weekly=${WEEKLY_HARD:-default}%)"
+    echo "▶️  [cc-run] Starting (soft=${THRESHOLD:-default}%, hard-session=${SESSION_HARD:-default}%, hard-weekly=${WEEKLY_HARD:-default}%, model=${MODEL:-claude default})"
     PROMPT="$TASK"$'\n'"$RULES"
-    claude $CLAUDE_ARGS -p "$PROMPT" || true
+    run_claude_with_heartbeat -p "$PROMPT"
   else
     echo "▶️  [cc-run] Resuming where it left off (round $ITER)"
     RESUME_PROMPT="Read .cc-quota/progress.md. If an item was reverted due to quota (back to pending), redo it FROM SCRATCH; then continue the remaining tasks from where you left off.${RULES}"
-    claude $CLAUDE_ARGS -c -p "$RESUME_PROMPT" || true
+    run_claude_with_heartbeat -c -p "$RESUME_PROMPT"
   fi
 
   if is_done; then
@@ -178,10 +261,10 @@ while true; do
   fi
 
   if [[ -f "$MARKER" ]]; then
-    MODE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("mode","soft"))' "$MARKER" 2>/dev/null || echo "soft")
-    WINDOW=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("window",""))' "$MARKER" 2>/dev/null || echo "")
-    RESETS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("resets_at") or "")' "$MARKER" 2>/dev/null || echo "")
-    ABORTED=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("aborted_item") or "")' "$MARKER" 2>/dev/null || echo "")
+    MODE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("mode","soft"))' "$MARKER_PY" 2>/dev/null || echo "soft")
+    WINDOW=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("window",""))' "$MARKER_PY" 2>/dev/null || echo "")
+    RESETS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("resets_at") or "")' "$MARKER_PY" 2>/dev/null || echo "")
+    ABORTED=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("aborted_item") or "")' "$MARKER_PY" 2>/dev/null || echo "")
     # 5-hour fallback for session, 1-hour fallback for weekly if resets_at is missing.
     FALLBACK=$([[ "$WINDOW" == "session" ]] && echo 18000 || echo 3600)
     SECS=$(sleep_seconds_until "$RESETS" "$FALLBACK")
