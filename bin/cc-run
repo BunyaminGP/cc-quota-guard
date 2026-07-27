@@ -140,6 +140,17 @@ MARKER_PY="$PROJ_PY/.cc-quota/STOP.json"
 PROGRESS="$PROJ/.cc-quota/progress.md"
 mkdir -p "$PROJ/.cc-quota"
 
+# If a PREVIOUS, unrelated run already finished in this project, its
+# progress.md still has "CC_QUOTA_DONE" in it. Without this, a brand-new
+# task started here would see that leftover marker after its very first
+# round and immediately report success — before Claude has done anything
+# for THIS task. Archive it so this run starts from a clean completion
+# state; the old file isn't lost, just renamed out of the way.
+if [[ -f "$PROGRESS" ]] && grep -q '^CC_QUOTA_DONE' "$PROGRESS"; then
+  mv "$PROGRESS" "${PROGRESS}.done-$(date +%Y%m%d%H%M%S)"
+  echo "ℹ️  [cc-run] Previous run's finished progress.md archived (this project already had a completed run here)."
+fi
+
 RULES=$(cat <<EOF
 
 --- QUOTA RULES (cc-run) ---
