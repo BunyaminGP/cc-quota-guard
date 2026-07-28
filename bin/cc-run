@@ -212,7 +212,11 @@ fi
 # corrupted install) rather than crashing or going silent.
 msg() {
   local key="$1"; shift
-  python3 "$(to_py_path "$I18N_PY")" "$CCLANG" "$key" "$@" 2>/dev/null || printf '[cc-run] %s\n' "$key"
+  # Captured into LAST_MSG (rather than left as a pure print) so call sites
+  # that also want to push a notification can reuse the exact same text
+  # instead of drafting a second copy of it — see notify() calls below.
+  LAST_MSG=$(python3 "$(to_py_path "$I18N_PY")" "$CCLANG" "$key" "$@" 2>/dev/null) || LAST_MSG="[cc-run] $key"
+  printf '%s\n' "$LAST_MSG"
 }
 
 if [[ "$HARD_ABORT" == "1" ]]; then
@@ -308,6 +312,22 @@ except Exception:
 # case we fall back to plain text output.
 STREAM_RENDERER="$CC_RUN_DIR/../scripts/stream_render.py"
 [[ -f "$STREAM_RENDERER" ]] || STREAM_RENDERER=""
+
+# Optional push notification for the moments this script itself controls
+# (resume happened, task complete, gave up) — the quota-threshold-hit
+# moment is notified separately, from inside the hook itself (quota_gate.py
+# runs as a different process and gets there first). Only fires if
+# CC_NOTIFY_URL is set (see README's Notifications section); notify.py
+# fails open on everything (no URL, bad URL, network down, timeout), so
+# `|| true` here is a second belt-and-suspenders layer, not the only one —
+# needed regardless, since this runs under `set -e` and a stray nonzero
+# exit from anywhere in the pipeline must never kill the wrapper over a
+# notification failure.
+NOTIFY_PY="$CC_RUN_DIR/../scripts/notify.py"
+notify() {
+  [[ -f "$NOTIFY_PY" ]] && python3 "$(to_py_path "$NOTIFY_PY")" "$1" "${2:-cc-quota-guard}" >/dev/null 2>&1
+  true
+}
 
 # Runs `claude <args>` in the background and prints a heartbeat line every
 # 15s while it's running, so a long silent stretch doesn't look like it
@@ -414,12 +434,14 @@ while true; do
     if run_claude_with_heartbeat -p "$PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   else
     msg resuming "iter=$ITER"
+    notify "$LAST_MSG" "cc-quota-guard: resumed"
     RESUME_PROMPT="Read .cc-quota/progress.md. If an item was reverted due to quota (back to pending), redo it FROM SCRATCH; then continue the remaining tasks from where you left off.${RULES}"
     if run_claude_with_heartbeat -c -p "$RESUME_PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   fi
 
   if is_done; then
     msg task_complete
+    notify "$LAST_MSG" "cc-quota-guard: done"
     break
   fi
 
@@ -451,6 +473,7 @@ while true; do
     CONSEC_FAILURES=$((CONSEC_FAILURES + 1))
     if [[ "$CONSEC_FAILURES" -gt "$MAX_RETRIES" ]]; then
       msg giving_up "status=$ROUND_STATUS" "count=$CONSEC_FAILURES" >&2
+      notify "$LAST_MSG" "cc-quota-guard: gave up"
       msg giving_up_hint >&2
       exit 1
     fi

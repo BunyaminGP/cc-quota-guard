@@ -100,6 +100,11 @@ try:
 except Exception:
     i18n = None
 
+try:
+    import notify  # noqa: E402
+except Exception:
+    notify = None
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -294,6 +299,15 @@ def _allow():
 
 
 def _block(reason, user_msg):
+    # Reuses user_msg as-is: it's already the localized, human-facing
+    # systemMessage (a status line — percentage, reset time — never task
+    # content or file paths), so no new message needs to be drafted here.
+    # Fires for both SOFT and HARD stops, since both funnel through this
+    # one function. Best-effort: notify.notify() itself never raises, and
+    # notify_url resolves to nothing unless the user configured it (see
+    # notify.py's docstring for why it's never read from config.json).
+    if notify is not None:
+        notify.notify(user_msg, title="cc-quota-guard")
     out = {
         "decision": "block",
         "reason": reason,

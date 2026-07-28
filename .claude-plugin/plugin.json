@@ -55,6 +55,12 @@
       "title": "Language / Dil",
       "description": "Language for the hook's user-facing status line (systemMessage) when a threshold stops Claude. Claude itself is always instructed in English regardless of this setting — this only affects what you, the human, see. Any code with a matching locales/<code>.json file works (currently: en, tr); an unrecognized code falls back to English.",
       "default": "en"
+    },
+    "notify_url": {
+      "type": "string",
+      "title": "Notification webhook URL (optional)",
+      "description": "Sends a short status ping (threshold hit, resumed, done, gave up) to this URL via HTTP POST — tested against ntfy.sh (e.g. https://ntfy.sh/your-topic-name). Never task content or file names, only the same short status line already shown to you. Leave empty to disable. Deliberately never read from .cc-quota/config.json — only this screen or the CC_NOTIFY_URL env var can set it, since a cloned project's config.json setting this would otherwise be able to silently exfiltrate your session status to a URL you don't control.",
+      "default": ""
     }
   }
 }

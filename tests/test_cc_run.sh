@@ -205,6 +205,27 @@ else
   fail "expected weekly-soft=90% in the starting line and a clean finish; got: $OUT"
 fi
 
+echo "=== 10) an unreachable CC_NOTIFY_URL never breaks a normal run (fail-open) ==="
+new_scenario notify_fail_open
+cat > "$SCENARIO_DIR/fakebin/claude" <<SH
+#!/usr/bin/env bash
+mkdir -p "$(to_py "$SCENARIO_DIR")/proj/.cc-quota"
+echo "CC_QUOTA_DONE" >> "$(to_py "$SCENARIO_DIR")/proj/.cc-quota/progress.md"
+SH
+chmod +x "$SCENARIO_DIR/fakebin/claude"
+# Port 1 is a reserved/unassigned port nothing listens on — notify.py's own
+# short timeout + fail-open handling (verified directly in tests/test_notify.py)
+# means this should never be visible here except as a fast, silent no-op;
+# this scenario is specifically about cc-run's OWN wiring (the notify()
+# bash helper under `set -e`) not accidentally propagating that failure.
+OUT=$(cd "$SCENARIO_DIR/proj" && PATH="$SCENARIO_DIR/fakebin:$PATH" CC_NOTIFY_URL="http://127.0.0.1:1/nowhere" bash "$CC_RUN" "task" 2>&1)
+STATUS=$?
+if [[ "$STATUS" -eq 0 ]] && echo "$OUT" | grep -q "Task complete"; then
+  pass "unreachable CC_NOTIFY_URL did not affect the normal run"
+else
+  fail "an unreachable notify URL should never break cc-run; exit=$STATUS, got: $OUT"
+fi
+
 echo
 echo "--- bin/cc-run syntax check ---"
 if bash -n "$CC_RUN"; then

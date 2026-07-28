@@ -70,6 +70,8 @@ tanımlanıyor:
 - **Yumuşak eşik — haftalık (%)** — varsayılan 97
 - **Sert eşik — haftalık (%)** — varsayılan 98
 - **Sert eşikte otomatik geri almayı (git stash) aç** — varsayılan kapalı
+- **Bildirim webhook URL'i (opsiyonel)** — varsayılan boş (kapalı). Bkz.
+  [Bildirimler](#bildirimler)
 
 Sonradan, yeniden kurmadan değiştirmek için:
 
@@ -202,6 +204,52 @@ CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1
 Kota kaynağı: Anthropic'in **dokümante edilmemiş** OAuth usage endpoint'i
 (`/api/oauth/usage`) — session (5s) ve haftalık yüzdeleri + reset zamanlarını
 verir.
+
+## Bildirimler
+
+Opsiyonel: önemli anlarda (bir eşik Claude'u durdurdu, `cc-run` devam etti,
+görev bitti, ya da `cc-run` retry'lardan sonra pes etti) terminale bakmak
+yerine bir push bildirimi al.
+
+**Kurulum (ntfy.sh — şu ana kadar test edilen tek backend):**
+
+1. [ntfy](https://ntfy.sh) uygulamasını kur (iOS/Android), ya da tarayıcıdan
+   ntfy.sh üzerinden kullan.
+2. Kendi seçtiğin bir konu (topic) adına abone ol. Public sunucuda **hiçbir
+   kimlik doğrulama yok** — konu adını bilen herkes ona yayınlanan her şeyi
+   görebilir — o yüzden düz bir kelime değil, tahmin edilmesi zor bir isim
+   seç. Örnek: `ccqg-adin-a1b2c3`, `test` değil.
+3. `CC_NOTIFY_URL=https://ntfy.sh/senin-konu-adin` ayarla — ortam
+   değişkeni olarak, ya da plugin'in yapılandırma ekranında (`notify_url`).
+
+Bu kadar. Sıradaki eşik vuruşu, resume, tamamlanma ya da pes etme bir
+bildirim gönderir.
+
+**Ne gönderilir:** sana zaten gösterilen aynı kısa durum satırı (hook'un
+`systemMessage`'ı, ya da `cc-run`'ın kendi terminal satırı) — ör. *"Kota
+eşiği aşıldı (5 saatlik session %86) — Claude temiz bir şekilde topluyor.
+Sıfırlanma: ..."*. Asla görev içeriği, dosya yolu ya da todo madde metni
+gitmez.
+
+**Bu araçtaki her şey gibi fail-open:** `CC_NOTIFY_URL` ayarlanmamışsa,
+URL yanlışsa, ağ yoksa ya da zaman aşımına uğrarsa — hiçbir şey bozulmaz.
+Bildirim sessizce atlanır; hook ve `cc-run` bildirim hiç yokmuş gibi devam
+eder. `CC_NOTIFY_TIMEOUT` (varsayılan 5sn) tek bir bildirim denemesinin
+alabileceği azami süreyi sınırlar.
+
+**Ham metin HTTP POST body'si kabul eden herhangi bir endpoint aynı
+şekilde çalışır** — ama sadece ntfy.sh gerçekten test edildi. Slack'in ya
+da Discord'un JSON webhook şeklini (`{"text": ...}` / `{"content": ...}`)
+konuşmuyor; `CC_NOTIFY_URL`'i doğrudan onlardan birine yöneltmek muhtemelen
+doğru render olmaz, çünkü JSON değil düz metin body POST ediliyor.
+
+**Güvenlik notu:** `hard_abort_enabled` gibi, `notify_url`/`CC_NOTIFY_URL`
+de bilerek `.cc-quota/config.json`'dan **asla** okunmaz — sadece ortam
+değişkeni ya da plugin'in kendi yapılandırma ekranı bunu ayarlayabilir. Bir
+bildirim URL'i session durumunun nereye gittiğini belirler; klonlanmış/
+güvenilmeyen bir projenin `config.json`'ının bunu ayarlayabilmesi, o
+projenin session'ın durumunu senin kontrolünde olmayan bir sunucuya
+sessizce yönlendirebilmesi demek olurdu.
 
 ## Güvenlik — hard-abort açmadan önce okuyun
 
@@ -358,6 +406,14 @@ Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 Üçü de hiçbir yerde ayarlanmadıysa sabit varsayılan devreye girer:
 80 / 95 / 97 / 98 / geri alma kapalı.
 
+`hard_abort_enabled` ve `notify_url`, bu üç katmanlı sistemin iki istisnası
+— ikisi de sadece **1** ya da **3**'ten okunabilir, `.cc-quota/config.json`'dan
+asla — ikisi de güvenlikle ilgili çünkü (klonlanmış/güvenilmeyen bir
+projenin config.json'ı ne otomatik `git stash`'i sessizce açabilmeli, ne de
+session durumunu senin kontrolünde olmayan bir URL'e sessizce
+yönlendirebilmeli). Bkz. [Güvenlik](#güvenlik--hard-abort-açmadan-önce-okuyun)
+ve [Bildirimler](#bildirimler).
+
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
 | `CC_SESSION_SOFT` | 80 | Session YUMUŞAK eşiği (%) — madde biter, sonra durur |
@@ -365,6 +421,8 @@ Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 | `CC_WEEKLY_SOFT` | 97 | Haftalık YUMUŞAK eşik (%) — madde biter, sonra durur |
 | `CC_WEEKLY_HARD` | 98 | Haftalık SERT eşik (%) — madde ortasında tetiklenebilir |
 | `CC_HARD_ABORT` | (kapalı) | SERT eşikte otomatik geri almayı (`git stash`) açar. `cc-run --enable-hard-abort` ile aynı |
+| `CC_NOTIFY_URL` | (kapalı) | Önemli anlarda push bildirimi için opsiyonel webhook URL'i — ntfy.sh'e karşı test edildi. `.cc-quota/config.json`'dan asla okunmaz. Bkz. [Bildirimler](#bildirimler) |
+| `CC_NOTIFY_TIMEOUT` | 5 | Tek bir bildirim denemesinin alabileceği azami süre (sn) — her iki durumda da fail-open |
 | `CC_USAGE_CACHE_TTL` | 30 | Kota cache süresi (sn) — aynı zamanda sert eşik tespit gecikmesi |
 | `CC_RESUME_BUFFER` | 60 | Reset sonrası ek bekleme (sn) |
 | `CC_CLAUDE_ARGS` | `--permission-mode acceptEdits` | `claude`'a geçilecek ekstra bayraklar |

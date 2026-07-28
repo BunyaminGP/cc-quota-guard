@@ -297,6 +297,34 @@ def test_load_config_malformed_env_var_does_not_crash(tmp_path, monkeypatch):
     assert cfg["session_soft"] == 80.0  # falls back to default, doesn't raise
 
 
+# --------------------------------------------------------------------------- _block / notify wiring
+
+def test_block_pushes_notification_with_user_msg(monkeypatch):
+    captured = {}
+
+    class FakeNotify:
+        @staticmethod
+        def notify(message, title=None, url=None):
+            captured["message"] = message
+            captured["title"] = title
+            return True
+
+    monkeypatch.setattr(qg, "notify", FakeNotify)
+    with pytest.raises(SystemExit):
+        qg._block("some reason for Claude", "some status line for the human")
+
+    assert captured["message"] == "some status line for the human"
+    assert captured["title"] == "cc-quota-guard"
+
+
+def test_block_does_not_crash_when_notify_module_missing(monkeypatch):
+    """Fail-open: a missing/broken notify.py (e.g. a partial install) must
+    never take the whole hook down with it."""
+    monkeypatch.setattr(qg, "notify", None)
+    with pytest.raises(SystemExit):
+        qg._block("reason", "user msg")
+
+
 # --------------------------------------------------------------------------- _do_soft_stop
 
 def test_do_soft_stop_session_window(tmp_path, monkeypatch):

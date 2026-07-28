@@ -6,6 +6,34 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Push notifications** (`scripts/notify.py`): optional webhook POST at
+  the moments that matter — a SOFT/HARD threshold stopping Claude,
+  `cc-run` resuming, the task finishing, or `cc-run` giving up after
+  retries. Set `CC_NOTIFY_URL` (env var or the plugin's `notify_url`
+  configure-screen field) to a webhook URL; tested end-to-end against a
+  real ntfy.sh topic and phone (both the raw `notify.py` CLI and the full
+  `cc-run` wrapper flow). Reuses the already-localized, already-privacy-
+  safe status text shown to the human (systemMessage / cc-run's own
+  terminal lines) as the notification body — no new message drafting, no
+  task content or file paths ever sent. Fails open on everything (no URL,
+  bad URL, no network, timeout — `CC_NOTIFY_TIMEOUT`, default 5s) and can
+  never break a hook call or a `cc-run` round.
+  Deliberately scoped to a plain-text POST body (what ntfy.sh expects) —
+  does NOT attempt Slack's or Discord's JSON webhook shape
+  (`{"text": ...}` / `{"content": ...}`), since that was never tested;
+  documented as a known limitation rather than an implied feature.
+  `notify_url` follows the same restricted precedence as
+  `hard_abort_enabled`: readable only from `CC_NOTIFY_URL` or the plugin's
+  own configure screen, **never** from `.cc-quota/config.json` — a notify
+  URL is an exfiltration channel (session status sent to whoever controls
+  it), not a cosmetic setting, so a cloned/untrusted project must not be
+  able to silently set it. New `tests/test_notify.py` (real local HTTP
+  server capturing an actual POST, fail-open cases, URL-resolution
+  precedence, and a behavioral regression guard that no code path in the
+  module ever opens a `config.json`); new tests in `test_quota_gate.py`
+  and a new `test_cc_run.sh` scenario.
+
 ## [0.9.0] — 2026-07-28
 
 ### Added

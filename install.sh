@@ -21,11 +21,12 @@ mkdir -p "$DEST/scripts" "$DEST/bin" "$DEST/templates" "$DEST/locales"
 cp "$SRC/scripts/quota_gate.py"    "$DEST/scripts/"
 cp "$SRC/scripts/usage.py"         "$DEST/scripts/"
 cp "$SRC/scripts/i18n.py"          "$DEST/scripts/"
+cp "$SRC/scripts/notify.py"        "$DEST/scripts/"
 cp "$SRC/scripts/stream_render.py" "$DEST/scripts/" 2>/dev/null || true
 cp "$SRC/locales/"*.json           "$DEST/locales/"
 cp "$SRC/bin/cc-run"               "$DEST/bin/"
 cp "$SRC/templates/progress.md"    "$DEST/templates/" 2>/dev/null || true
-chmod +x "$DEST/bin/cc-run" "$DEST/scripts/quota_gate.py" "$DEST/scripts/usage.py" "$DEST/scripts/i18n.py"
+chmod +x "$DEST/bin/cc-run" "$DEST/scripts/quota_gate.py" "$DEST/scripts/usage.py" "$DEST/scripts/i18n.py" "$DEST/scripts/notify.py"
 
 HOOK_SCRIPT="$DEST/scripts/quota_gate.py"
 

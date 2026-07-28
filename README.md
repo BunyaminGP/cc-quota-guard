@@ -67,6 +67,8 @@ plugin's `userConfig`:
 - **Soft threshold — weekly (%)** — default 97
 - **Hard threshold — weekly (%)** — default 98
 - **Enable auto-revert (git stash) on the hard threshold** — default off
+- **Notification webhook URL (optional)** — default empty (disabled). See
+  [Notifications](#notifications)
 
 To change these later without reinstalling:
 
@@ -195,6 +197,52 @@ to opt into auto-revert.
 Quota source: Anthropic's **undocumented** OAuth usage endpoint
 (`/api/oauth/usage`) — gives session (5h) and weekly utilization percentages
 plus reset times.
+
+## Notifications
+
+Optional: get a push notification at the moments that matter (a threshold
+stopped Claude, `cc-run` resumed, the task finished, or `cc-run` gave up
+after retries) instead of having to watch the terminal.
+
+**Setup (ntfy.sh — the only backend actually tested):**
+
+1. Install the [ntfy](https://ntfy.sh) app (iOS/Android), or use it in a
+   browser at ntfy.sh.
+2. Subscribe to a topic name of your choosing. The public server has **no
+   authentication** — anyone who knows your topic name can read what's
+   published to it — so pick something hard to guess, not a plain word.
+   e.g. `ccqg-yourname-a1b2c3`, not `test`.
+3. Set `CC_NOTIFY_URL=https://ntfy.sh/your-topic-name` — as an environment
+   variable, or in the plugin's configure screen (`notify_url`).
+
+That's it. The next threshold hit, resume, completion, or give-up pushes a
+notification.
+
+**What gets sent:** the exact same short status line already shown to you
+(the hook's `systemMessage`, or `cc-run`'s own terminal line) — e.g.
+*"Quota threshold reached (5-hour session 86%) — Claude is wrapping up
+cleanly. Reset: ..."*. Never task content, file paths, or todo item text.
+
+**Fail-open, like everything else in this tool:** no `CC_NOTIFY_URL` set,
+a wrong URL, no network, or a timeout — nothing breaks. The notification
+is silently skipped; the hook and `cc-run` continue exactly as if
+notifications didn't exist. `CC_NOTIFY_TIMEOUT` (default 5s) caps how long
+a single notification attempt can take.
+
+**Any endpoint that accepts a raw-text HTTP POST body works the same
+way** — but only ntfy.sh has actually been tested. This does **not** speak
+Slack's or Discord's JSON webhook shape (`{"text": ...}` /
+`{"content": ...}`); pointing `CC_NOTIFY_URL` directly at one of those
+likely won't render correctly, since a plain-text body gets POSTed, not
+JSON. Untested claim removed rather than left implied — see
+[CHANGELOG.md](CHANGELOG.md).
+
+**Security note:** like `hard_abort_enabled`, `notify_url`/`CC_NOTIFY_URL`
+is deliberately **never** read from `.cc-quota/config.json` — only the env
+var or the plugin's own configure screen can set it. A notify URL is where
+your session status gets sent; letting a cloned/untrusted project's
+`config.json` set it would let that project silently redirect status about
+your session to a server you don't control.
 
 ## Safety — read this before enabling hard-abort
 
@@ -348,6 +396,14 @@ There are three places to set the thresholds, checked in this order —
 If none of the three are set anywhere, the built-in fallback is
 80 / 95 / 97 / 98 / hard-abort off.
 
+`hard_abort_enabled` and `notify_url` are the two exceptions to this
+three-tier system — both are only ever readable from **1** or **3** above,
+never from `.cc-quota/config.json`, since both are security-relevant (a
+cloned/untrusted project's config.json must not be able to silently turn
+on automatic `git stash`, or silently redirect your session status to a
+URL you don't control). See [Safety](#safety--read-this-before-enabling-hard-abort)
+and [Notifications](#notifications).
+
 | Variable | Default | Description |
 |---|---|---|
 | `CC_SESSION_SOFT` | 80 | Session SOFT threshold (%) — finishes the item, then stops |
@@ -355,6 +411,8 @@ If none of the three are set anywhere, the built-in fallback is
 | `CC_WEEKLY_SOFT` | 97 | Weekly SOFT threshold (%) — finishes the item, then stops |
 | `CC_WEEKLY_HARD` | 98 | Weekly HARD threshold (%) — can fire mid-item |
 | `CC_HARD_ABORT` | (unset/false) | Opt in to auto-revert (`git stash`) on a HARD threshold. Same as `cc-run --enable-hard-abort` |
+| `CC_NOTIFY_URL` | (unset) | Optional webhook URL for push notifications at key moments — tested against ntfy.sh. Never read from `.cc-quota/config.json`. See [Notifications](#notifications) |
+| `CC_NOTIFY_TIMEOUT` | 5 | Max seconds a single notification attempt can take before giving up (fail-open either way) |
 | `CC_USAGE_CACHE_TTL` | 30 | Usage cache lifetime (s) — also the hard-threshold detection lag |
 | `CC_RESUME_BUFFER` | 60 | Extra sleep after the reset time (s) |
 | `CC_CLAUDE_ARGS` | `--permission-mode acceptEdits` | Extra flags passed to `claude` |
