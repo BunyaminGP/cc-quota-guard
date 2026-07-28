@@ -3,7 +3,7 @@
   "name": "cc-quota-guard",
   "displayName": "cc-quota-guard",
   "description": "Quota-aware Claude Code: stop at a clean checkpoint before you hit your usage limit, and optionally auto-revert an in-progress todo item if you blow through a hard threshold.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "cc-quota-guard contributors"
   },

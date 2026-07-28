@@ -178,7 +178,10 @@ auto-revert.
    - `.cc-quota/todos_state.json` — the hook's own snapshot of the todo list.
 3. **Wrapper** (`bin/cc-run`) — starts Claude, reads the reset time from
    `.cc-quota/STOP.json` when a threshold stops it, sleeps until then, and
-   resumes with `claude -c`. Stops when `progress.md` contains `CC_QUOTA_DONE`.
+   resumes with `claude -c`. If a round instead fails outright or hangs past
+   `CC_ROUND_TIMEOUT` (e.g. a network outage right when it tried to resume),
+   it retries with backoff rather than giving up silently. Stops when
+   `progress.md` contains `CC_QUOTA_DONE`.
 
 Quota source: Anthropic's **undocumented** OAuth usage endpoint
 (`/api/oauth/usage`) — gives session (5h) and weekly utilization percentages
@@ -291,7 +294,12 @@ Anthropic likely changed the schema — update the field names in
   but a single very large tool call inside that window can still overshoot a
   threshold. Set thresholds a bit below 100%, not right at it.
 - **The machine has to stay on.** The wrapper sleeps until the reset; if the
-  computer sleeps or shuts down, it won't resume on its own.
+  computer sleeps or shuts down, it won't resume on its own. A *transient
+  network outage while the machine stays awake* is different and is
+  handled: if a round (initial or resume) fails outright or makes zero
+  progress for longer than `CC_ROUND_TIMEOUT` (default 1h — e.g. the network
+  was down at the exact moment it woke up to resume), `cc-run` retries with
+  backoff instead of silently giving up, up to `CC_MAX_RETRIES` times.
 - **Don't rely on context recall.** `claude -c` brings the conversation back
   but isn't a hard guarantee. The real memory is `progress.md` + git commits
   — put anything critical there.
@@ -327,6 +335,9 @@ If none of the three are set anywhere, the built-in fallback is 80 / 95 / 98
 | `CC_USAGE_CACHE_TTL` | 30 | Usage cache lifetime (s) — also the hard-threshold detection lag |
 | `CC_RESUME_BUFFER` | 60 | Extra sleep after the reset time (s) |
 | `CC_CLAUDE_ARGS` | `--permission-mode acceptEdits` | Extra flags passed to `claude` |
+| `CC_ROUND_TIMEOUT` | 3600 | Max seconds a single round (initial or resume) can run with zero progress before it's treated as stuck (e.g. the network dropped) and ended so it can be retried. `0` disables the cap. |
+| `CC_MAX_RETRIES` | 5 | How many times in a row a round can end abnormally (non-zero exit, including a `CC_ROUND_TIMEOUT` cutoff) before `cc-run` gives up instead of retrying |
+| `CC_RETRY_BACKOFF` | 30 | Base seconds between retries; grows linearly with each consecutive failure (attempt N waits `N × CC_RETRY_BACKOFF`s) |
 
 ## Uninstall
 

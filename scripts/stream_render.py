@@ -18,12 +18,27 @@ Usage: claude ... --output-format stream-json --verbose | python3 stream_render.
 import json
 import sys
 
-# On Windows, stdout's encoding follows the system codepage (e.g. cp1254),
-# which can't represent emoji and raises UnicodeEncodeError on print().
-# Force UTF-8 regardless of locale; no-op on platforms where it's already
-# UTF-8. Requires Python 3.7+ (already required elsewhere in this project).
+# On Windows, both stdin and stdout follow the system codepage (e.g. cp1254)
+# unless told otherwise — but `claude --output-format stream-json` always
+# writes genuine UTF-8. Only reconfiguring stdout (as this used to do) left
+# stdin being decoded with the wrong codepage: multi-byte UTF-8 characters
+# (ş, ğ, ü, emoji, ...) got misread as several wrong single-byte characters
+# BEFORE this script ever saw them, so re-encoding correctly on the way out
+# just faithfully printed that already-corrupted text (mojibake that no
+# console-encoding fix downstream could undo). Reconfigure both ends to
+# UTF-8; no-op on platforms where it already is. Requires Python 3.7+
+# (already required elsewhere in this project).
 try:
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdin.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+# errors="replace" on the way out: a stray/invalid character (e.g. a lone
+# UTF-16 surrogate from a malformed upstream event) must not be able to
+# crash this script and cut off visibility into the rest of a run that may
+# still be working fine — print a replacement character instead of raising
+# UnicodeEncodeError.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 

@@ -184,8 +184,10 @@ CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
    - `.cc-quota/todos_state.json` — hook'un kendi todo anlık görüntüsü.
 3. **Wrapper** (`bin/cc-run`) — Claude'u başlatır; bir eşik onu durdurunca
    `.cc-quota/STOP.json`'daki reset zamanını okur, o zamana kadar uyur,
-   `claude -c` ile devam ettirir. `progress.md`'de `CC_QUOTA_DONE` görünce
-   durur.
+   `claude -c` ile devam ettirir. Bir round tamamen başarısız olur ya da
+   `CC_ROUND_TIMEOUT` süresini aşarak asılı kalırsa (ör. tam devam etme
+   anında ağ kesilmesi), sessizce pes etmek yerine backoff ile yeniden
+   dener. `progress.md`'de `CC_QUOTA_DONE` görünce durur.
 
 Kota kaynağı: Anthropic'in **dokümante edilmemiş** OAuth usage endpoint'i
 (`/api/oauth/usage`) — session (5s) ve haftalık yüzdeleri + reset zamanlarını
@@ -300,7 +302,12 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
   bu pencere içindeki tek bir çok büyük tool çağrısı yine de bir eşiği
   aşabilir. Eşikleri %100'e değil biraz altına koyun.
 - **Makine açık kalmalı.** Wrapper reset'e kadar uyur; bilgisayar
-  uyursa/kapanırsa kendiliğinden devam etmez.
+  uyursa/kapanırsa kendiliğinden devam etmez. *Makine açıkken yaşanan geçici
+  bir ağ kesintisi* farklı bir durum ve artık ele alınıyor: bir round (ilk
+  ya da devam) tamamen başarısız olur ya da `CC_ROUND_TIMEOUT` süresince
+  (varsayılan 1sa — ör. tam devam etme anında ağ kesikse) hiç ilerleme
+  kaydetmezse, `cc-run` sessizce pes etmek yerine `CC_MAX_RETRIES` sayısına
+  kadar backoff ile yeniden dener.
 - **Bağlam kaybına güvenmeyin.** `claude -c` konuşmayı geri getirir ama tam
   garanti değildir. Gerçek hafıza `progress.md` + git commit'leridir; kritik
   olan her şeyi oraya yazın.
@@ -335,6 +342,9 @@ Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 | `CC_USAGE_CACHE_TTL` | 30 | Kota cache süresi (sn) — aynı zamanda sert eşik tespit gecikmesi |
 | `CC_RESUME_BUFFER` | 60 | Reset sonrası ek bekleme (sn) |
 | `CC_CLAUDE_ARGS` | `--permission-mode acceptEdits` | `claude`'a geçilecek ekstra bayraklar |
+| `CC_ROUND_TIMEOUT` | 3600 | Tek bir round'un (ilk ya da devam) hiç ilerleme kaydetmeden çalışabileceği azami süre (sn) — aşılırsa asılı kaldığı varsayılıp (ör. ağ kesildi) yeniden denenir. `0` sınırı kapatır. |
+| `CC_MAX_RETRIES` | 5 | Bir round'un art arda kaç kez anormal biterse (sıfır olmayan çıkış, `CC_ROUND_TIMEOUT` dahil) `cc-run`'ın yeniden denemek yerine pes edeceği |
+| `CC_RETRY_BACKOFF` | 30 | Denemeler arası temel saniye; her art arda başarısızlıkta doğrusal artar (N. deneme `N × CC_RETRY_BACKOFF` sn bekler) |
 
 ## Kaldırma
 

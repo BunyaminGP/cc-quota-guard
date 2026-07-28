@@ -205,6 +205,13 @@ STREAM_RENDERER="$CC_RUN_DIR/../scripts/stream_render.py"
 # --output-format stream-json so we can also show which model actually ran
 # (aliases like "opus" resolve to a specific dated model) and which tool is
 # running — same underlying request, just parsed instead of printed raw.
+#
+# Returns claude's (or the renderer's) real exit status — 124 if this round
+# was force-ended for running longer than CC_ROUND_TIMEOUT with no progress
+# (the convention `timeout(1)` uses). Callers must invoke this as the
+# condition of an `if` (see the main loop) so a non-zero return doesn't
+# trip `set -e` and kill the whole script — the entire point is to detect
+# the failure and retry, not to crash.
 run_claude_with_heartbeat() {
   if [[ -n "$STREAM_RENDERER" ]]; then
     claude $CLAUDE_ARGS --output-format stream-json --verbose "$@" \
@@ -214,9 +221,28 @@ run_claude_with_heartbeat() {
   fi
   local pid=$!
   local waited=0
+  local max_wait="${CC_ROUND_TIMEOUT:-3600}"
   while kill -0 "$pid" 2>/dev/null; do
     sleep 15
     waited=$((waited + 15))
+    # It may have finished during that sleep — the heartbeat check only
+    # runs every 15s, so a fast round can still be alive at the top of this
+    # iteration but done by now. Recheck before treating it as stuck, so a
+    # quick, legitimate finish is never misreported as a timeout (124).
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    if [[ "$max_wait" -gt 0 && $waited -ge $max_wait ]]; then
+      echo "⚠️  [cc-run] No progress for ${waited}s (limit \$CC_ROUND_TIMEOUT=${max_wait}s) — assuming this round is stuck (e.g. the network dropped mid-request) and ending it so it can be retried." >&2
+      # Kills the tracked process (the renderer, or claude itself when the
+      # renderer isn't used); on the renderer path this closes its end of
+      # the pipe, which normally makes claude's own write fail shortly
+      # after and exit on its own too — not a guaranteed-instant kill of
+      # claude specifically, but good enough for a wrapper script like this.
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
     local item
     item="$(current_item)"
     if [[ -n "$item" ]]; then
@@ -225,7 +251,7 @@ run_claude_with_heartbeat() {
       echo "⏳ [cc-run] still working (${waited}s)"
     fi
   done
-  wait "$pid" || true
+  wait "$pid"
 }
 
 # resets_at (ISO 8601) -> seconds to sleep from now. Falls back if missing.
@@ -251,6 +277,22 @@ PY
 
 is_done() { [[ -f "$PROGRESS" ]] && grep -q '^CC_QUOTA_DONE' "$PROGRESS"; }
 
+# Consecutive-failure tracking for the retry logic below: a round that ends
+# with no STOP marker and no CC_QUOTA_DONE is ambiguous on its own — it's
+# the same observable outcome whether Claude legitimately decided there was
+# nothing left to do, or the resume attempt never got off the ground (e.g.
+# the network was down at the exact moment it woke up to resume). The
+# round's own exit status disambiguates: a clean (0) exit with nothing left
+# to show for it is treated as "Claude ended the turn on its own" (existing
+# behavior, unchanged); a non-zero exit (including 124 from the round
+# timing out above) is treated as a transient failure worth retrying with
+# backoff, up to CC_MAX_RETRIES times, instead of silently giving up — the
+# entire point of this tool is surviving exactly this kind of interruption
+# unattended.
+MAX_RETRIES="${CC_MAX_RETRIES:-5}"
+RETRY_BACKOFF="${CC_RETRY_BACKOFF:-30}"
+CONSEC_FAILURES=0
+
 ITER=0
 while true; do
   ITER=$((ITER+1))
@@ -259,11 +301,11 @@ while true; do
   if [[ $ITER -eq 1 ]]; then
     echo "▶️  [cc-run] Starting (soft=${THRESHOLD:-default}%, hard-session=${SESSION_HARD:-default}%, hard-weekly=${WEEKLY_HARD:-default}%, model=${MODEL:-claude default})"
     PROMPT="$TASK"$'\n'"$RULES"
-    run_claude_with_heartbeat -p "$PROMPT"
+    if run_claude_with_heartbeat -p "$PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   else
     echo "▶️  [cc-run] Resuming where it left off (round $ITER)"
     RESUME_PROMPT="Read .cc-quota/progress.md. If an item was reverted due to quota (back to pending), redo it FROM SCRATCH; then continue the remaining tasks from where you left off.${RULES}"
-    run_claude_with_heartbeat -c -p "$RESUME_PROMPT"
+    if run_claude_with_heartbeat -c -p "$RESUME_PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   fi
 
   if is_done; then
@@ -272,6 +314,7 @@ while true; do
   fi
 
   if [[ -f "$MARKER" ]]; then
+    CONSEC_FAILURES=0  # a real threshold stop happened — this round worked, unrelated to the retry counter below
     MODE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("mode","soft"))' "$MARKER_PY" 2>/dev/null || echo "soft")
     WINDOW=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("window",""))' "$MARKER_PY" 2>/dev/null || echo "")
     RESETS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("resets_at") or "")' "$MARKER_PY" 2>/dev/null || echo "")
@@ -290,7 +333,24 @@ while true; do
     continue
   fi
 
-  # No marker, no done signal: Claude finished the round on its own or errored out. Stop the loop.
+  # No marker, no done signal, and the round exited abnormally (non-zero —
+  # includes a network outage that made `claude` fail or hang past
+  # CC_ROUND_TIMEOUT above): retry with linear backoff instead of assuming
+  # Claude deliberately stopped, up to CC_MAX_RETRIES times.
+  if [[ "$ROUND_STATUS" -ne 0 ]]; then
+    CONSEC_FAILURES=$((CONSEC_FAILURES + 1))
+    if [[ "$CONSEC_FAILURES" -gt "$MAX_RETRIES" ]]; then
+      echo "❌ [cc-run] Round failed (exit $ROUND_STATUS) $CONSEC_FAILURES times in a row — giving up." >&2
+      echo "    Check your network / the claude CLI, then resume manually: claude -c   (or re-run cc-run — .cc-quota/progress.md has what's left)." >&2
+      exit 1
+    fi
+    BACKOFF=$((RETRY_BACKOFF * CONSEC_FAILURES))
+    echo "⚠️  [cc-run] Round ended abnormally (exit $ROUND_STATUS), attempt ${CONSEC_FAILURES}/${MAX_RETRIES} — likely a transient issue (e.g. network down). Retrying in ${BACKOFF}s."
+    sleep "$BACKOFF"
+    continue
+  fi
+
+  # No marker, no done signal, clean exit: Claude finished the round on its own. Stop the loop.
   echo "ℹ️  [cc-run] No STOP marker and no DONE signal — Claude ended the turn on its own. Stopping."
   echo "    (If you expected it to continue, check .cc-quota/progress.md and the terminal output.)"
   break
