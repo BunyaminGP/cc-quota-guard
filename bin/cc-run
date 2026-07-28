@@ -251,7 +251,16 @@ else
   HARD_RULE_TEXT="auto-revert wasn't forced on for this run; whether it fires depends on your plugin/project configuration (default: off, meaning you'll just be told to stop as safely as possible). If a message tells you changes were reverted, do NOT commit — just leave a short note and stop."
 fi
 
-RULES=$(cat <<EOF
+# Read via a TOP-LEVEL heredoc rather than wrapping a cat-heredoc in
+# command substitution: bash 3.2 (macOS's stock /bin/bash) scans command
+# substitutions by naive character matching with no understanding of
+# heredocs, so the lone apostrophe in "you'll" below would open a phantom
+# quote region and make it miss the closing paren — rejecting the entire
+# file as a syntax error. A top-level heredoc has no such scanner
+# involved; any prose is safe in it, now and after future edits.
+# `read -d ''` reads to EOF; it then exits nonzero (no NUL delimiter
+# found), which `|| true` absorbs so `set -e` doesn't kill us.
+IFS= read -r -d '' RULES <<EOF || true
 
 --- QUOTA RULES (cc-run) ---
 A two-tier "quota gate" is active:
@@ -273,7 +282,6 @@ line "-> <item>"; right after you finish one, print one short line
 "[done] <item>". Keep these to a few words each. This is in addition to,
 not instead of, your normal final summary.
 EOF
-)
 
 # Current in_progress todo item's text, for heartbeat lines (best-effort).
 # Takes the project path as argv (not embedded in the script string) so it

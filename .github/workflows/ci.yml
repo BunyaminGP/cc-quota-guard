@@ -37,6 +37,8 @@ jobs:
           python -m py_compile scripts/quota_gate.py scripts/usage.py scripts/stream_render.py scripts/i18n.py
           bash -n bin/cc-run
           bash -n install.sh
+          bash -n tests/test_cc_run.sh
+          python tests/check_bash32_compat.py bin/cc-run install.sh tests/test_cc_run.sh shell/cc-run.sh
           python -c "import json; json.load(open('.claude-plugin/plugin.json')); json.load(open('.claude-plugin/marketplace.json'))"
           python -c "import json,glob; [json.load(open(f, encoding='utf-8')) for f in glob.glob('locales/*.json')]"
 

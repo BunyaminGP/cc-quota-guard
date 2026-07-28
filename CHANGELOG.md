@@ -4,7 +4,29 @@ All notable changes to cc-quota-guard are documented here. Versions match
 `.claude-plugin/plugin.json` and the `cc-quota-guard--vX.Y.Z` git tags.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — targeting 0.8.2
+## [Unreleased] — targeting 0.8.3
+
+### Fixed
+- The 0.8.2 macOS fix was incomplete: the RULES prompt block was still
+  built as a cat-heredoc wrapped in command substitution, and bash 3.2's
+  naive scanner — which doesn't understand heredocs — treated the lone
+  apostrophe in the heredoc's prose ("you'll") as an opened quote and
+  never found the closing paren, so `bash -n` still exited 2 on macOS.
+  Now read via a top-level heredoc (`IFS= read -r -d '' RULES <<EOF`),
+  where any prose is safe no matter what future edits add to it.
+
+### Added
+- `tests/check_bash32_compat.py`: static guard that scans every shell
+  script for the two bash-3.2 poison patterns (odd apostrophe count
+  inside a `$()` span, heredoc inside `$()`), wired into the CI syntax
+  step — so the next regression is caught on all lanes with a message
+  naming the exact line, instead of a bare `bash -n` exit 2 from the
+  macOS lane only.
+
+## [0.8.2] — 2026-07-28
+
+**Note:** still broken on macOS — the fix below removed two of the three
+bash-3.2-incompatible constructs but missed one; completed in 0.8.3.
 
 ### Fixed
 - `bin/cc-run` didn't parse on macOS's stock `/bin/bash` (3.2, what
@@ -17,6 +39,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   script as a syntax error before running a single line. Both restructured
   into plain variable assignments. Caught by the first-ever macOS CI run
   (`bash -n` exiting 2), which the Ubuntu/Windows lanes passed.
+
+### Added
+- README badges (CI, license, changelog).
 
 ## [0.8.1] — 2026-07-28
 
