@@ -368,6 +368,14 @@ def test_label_and_messages_localized_but_reason_language_is_separate():
     assert "Kota eşiği" in tr_msg
 
 
+def test_label_week_sonnet_reuses_weekly_translation_with_model_suffix():
+    """"Sonnet" is a model name, not translatable prose, so it's appended
+    directly rather than needing its own locale key per language — this
+    keeps week_sonnet's label from drifting out of sync with week_all's."""
+    assert qg._label("week_sonnet", "en") == qg._label("week_all", "en") + " (Sonnet)"
+    assert qg._label("week_sonnet", "tr") == qg._label("week_all", "tr") + " (Sonnet)"
+
+
 def test_hard_user_msg_distinguishes_reverted_vs_clean():
     reverted = qg._hard_user_msg("en", "session", 96, "2026-01-01T00:00:00Z", did_revert=True)
     clean = qg._hard_user_msg("en", "session", 96, "2026-01-01T00:00:00Z", did_revert=False)

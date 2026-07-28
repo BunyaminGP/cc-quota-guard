@@ -557,8 +557,13 @@ def _marker_still_valid(proj):
 def _label(which, lang):
     key = "label_session" if which == "session" else "label_week"
     if i18n is None:
-        return "5-hour session" if which == "session" else "weekly"
-    return i18n.msg(lang, key)
+        base = "5-hour session" if which == "session" else "weekly"
+    else:
+        base = i18n.msg(lang, key)
+    # "Sonnet" is a model name, not translatable prose — appended directly
+    # rather than adding a locale key per language, so week_sonnet reuses
+    # the exact same "weekly" translation as week_all instead of drifting.
+    return (base + " (Sonnet)") if which == "week_sonnet" else base
 
 
 def _soft_user_msg(lang, label, pct, resets_at):
@@ -794,8 +799,19 @@ def main():
 
     session = u.get("session") or {}
     week = u.get("week_all") or {}
+    # Some accounts/plans also get a Sonnet-specific 7-day figure, separate
+    # from the all-models week_all total — a heavy-Sonnet user could burn
+    # through *that* cap while week_all still looks comfortably low, which
+    # week_all alone would never catch. Checked against the exact same
+    # weekly_soft/weekly_hard thresholds as week_all (no separate config
+    # knob — this is a safety net on existing settings, not a new setting).
+    # Absent on plans/responses that don't report it (pct stays None), same
+    # as any other missing field here — the existing `is not None` guards
+    # already handle that.
+    week_sonnet = u.get("week_sonnet") or {}
     s_pct = session.get("pct")
     w_pct = week.get("pct")
+    ws_pct = week_sonnet.get("pct")
 
     # HARD threshold — checked on every call, takes priority over soft.
     # state is re-sanitized right before use: an in_progress claim is only
@@ -809,17 +825,23 @@ def main():
         _do_hard_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_hard"],
                       _sanitize_state_for_revert(proj, state, is_git()), is_git(), cfg["hard_abort_enabled"],
                       cfg["language"])
+    if ws_pct is not None and ws_pct >= cfg["weekly_hard"]:
+        _do_hard_stop(proj, "week_sonnet", ws_pct, week_sonnet.get("resets_at"), cfg["weekly_hard"],
+                      _sanitize_state_for_revert(proj, state, is_git()), is_git(), cfg["hard_abort_enabled"],
+                      cfg["language"])
 
     # SOFT thresholds — only checked at item boundaries: a TodoWrite call, or
     # (on Claude Code versions that plan this way instead) a
-    # TaskCreate/TaskUpdate/TaskList call. Session and weekly are independent
-    # tiers, same as their HARD counterparts above; either can fire on its
-    # own.
+    # TaskCreate/TaskUpdate/TaskList call. Session, weekly, and weekly
+    # (Sonnet) are independent tiers, same as their HARD counterparts
+    # above; any one of them can fire on its own.
     if tool_name in ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList"):
         if s_pct is not None and s_pct >= cfg["session_soft"]:
             _do_soft_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_soft"], cfg["language"])
         if w_pct is not None and w_pct >= cfg["weekly_soft"]:
             _do_soft_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_soft"], cfg["language"])
+        if ws_pct is not None and ws_pct >= cfg["weekly_soft"]:
+            _do_soft_stop(proj, "week_sonnet", ws_pct, week_sonnet.get("resets_at"), cfg["weekly_soft"], cfg["language"])
 
     _allow()
 

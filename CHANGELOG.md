@@ -6,6 +6,48 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-29
+
+First stable release. No functional changes since 0.10.0 beyond what's
+listed below — the jump from 0.x is a statement of intent (no breaking
+changes planned for a while), not a claim that every code path has been
+run on every platform. See Honest warnings in the README for what's still
+best-effort (notably: the macOS Keychain fallback below is implemented
+from documented behavior, not yet verified against real macOS hardware —
+low risk regardless, since this project fails open by design: a bug there
+degrades to "no protection," the same as before this existed, never to
+something actively harmful).
+
+### Added
+- **`CLAUDE_CODE_OAUTH_TOKEN` support and a real macOS Keychain
+  fallback** in `scripts/usage.py`'s `_read_token()`: checked in order —
+  `CLAUDE_CODE_OAUTH_TOKEN` env var (matches Claude Code's own precedence,
+  works on every platform), the credentials file (as before), then — on
+  macOS specifically, if the file doesn't exist — the system Keychain
+  (service name `"Claude Code-credentials"`, read via the `security` CLI,
+  no new dependency). Previously this project only *documented* the
+  macOS-Keychain gap as an unverified hypothesis; confirmed for real via
+  Claude Code's own docs and public bug reports (one of which shows a
+  Claude Code version actively deleting the credentials file once
+  Keychain is in use — i.e. zero protection on a real default macOS
+  install, not just a theoretical risk). The Keychain codepath itself is
+  still implemented from documented behavior rather than run against a
+  real Mac (this project has none) — see README's Honest warnings.
+- **`week_sonnet` is now actually checked**, closing a real gap: some
+  plans report a Sonnet-specific 7-day usage figure separately from the
+  all-models weekly total, which `usage.py` already fetched but
+  `quota_gate.py` never looked at. A heavy-Sonnet session could burn
+  through that cap while the all-models total still looked comfortably
+  low, and the guard would never notice. Now checked against the exact
+  same `weekly_soft`/`weekly_hard` thresholds already used for the
+  all-models total — no new setting, just a safety net on the existing
+  ones. `_label()` reuses the "weekly" translation with a `" (Sonnet)"`
+  suffix (a model name, not translatable prose) rather than adding a
+  locale key per language.
+- `CONTRIBUTING.md`: setup, how to run the test suite (including the
+  bash-3.2 compat checker), and the design principles a PR touching the
+  quota-detection/revert/credential logic is expected to follow.
+
 ## [0.10.0] — 2026-07-28
 
 ### Added

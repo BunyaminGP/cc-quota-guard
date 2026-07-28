@@ -183,6 +183,11 @@ to opt into auto-revert.
    - On **every** call: checks the HARD thresholds. A single todo item's
      work (many Edit/Bash/Write calls) can run long after one planning-tool
      call — checking only there would notice a quota spike far too late.
+     If your plan reports a Sonnet-specific 7-day figure separately from
+     the all-models weekly total, that's checked too, against the same
+     `weekly_soft`/`weekly_hard` thresholds — a heavy-Sonnet session could
+     otherwise burn through that cap while the all-models total still
+     looks comfortably low.
 2. **State files**
    - `.cc-quota/progress.md` — what's done, what's next, and (if hard-abort
      fired) which item was reverted. Read on resume.
@@ -307,10 +312,13 @@ just installed. A few things to know before you turn it on:
 - `bash`, `python3`
 - Claude Code CLI (`claude`), Pro/Max **subscription** (OAuth login) — the
   usage endpoint this tool reads only exists for that billing mode
-- A valid OAuth token in `~/.claude/.credentials.json` (created automatically
-  when you log into Claude Code). **Unverified on macOS:** if your install
-  stores this in the system Keychain instead of that file, this tool has
-  nothing to read and quietly fails open (see [Honest warnings](#honest-warnings)).
+- A valid OAuth token — from `CLAUDE_CODE_OAUTH_TOKEN` (if set), or
+  `~/.claude/.credentials.json` (created automatically when you log into
+  Claude Code), or on macOS specifically, the system Keychain as a
+  fallback when that file doesn't exist (see
+  [Honest warnings](#honest-warnings) — the Keychain path is implemented
+  from Claude Code's own documented behavior, not yet verified against a
+  real Mac).
 - git, only if you plan to use `--enable-hard-abort`
 
 ### This tool does nothing on pay-as-you-go (API key) billing
@@ -369,14 +377,16 @@ Anthropic likely changed the schema — update the field names in
   change.
 - **Plan.** The usage endpoint works on Pro/Max. On a different plan,
   `--probe` may return nothing or something different.
-- **macOS Keychain storage is unverified.** `scripts/usage.py` only reads
-  `~/.claude/.credentials.json`. If your Claude Code install keeps the OAuth
-  token in the system Keychain instead (this project hasn't confirmed
-  whether/when that happens on a real Mac), the file simply won't exist and
-  this tool fails open with zero protection — silently, same as any other
-  usage-read failure. Run `python3 scripts/usage.py` to check; if it reports
-  a missing credentials file, that's what's happening. Please open an issue
-  if you hit this — it would need Keychain access added.
+- **macOS Keychain fallback is implemented but not yet verified on real
+  hardware.** `scripts/usage.py` checks `CLAUDE_CODE_OAUTH_TOKEN`, then
+  `~/.claude/.credentials.json`, then — on macOS, if that file doesn't
+  exist — shells out to `security find-generic-password -s "Claude
+  Code-credentials" -w` to read the token from the system Keychain. The
+  service name and overall behavior are confirmed from Claude Code's own
+  docs and public bug reports, not from running this against a real Mac
+  (this project doesn't have one). If it doesn't work for your install,
+  `python3 scripts/usage.py --probe` will show where it fails — please
+  open an issue with that output.
 
 ## Settings
 
@@ -484,11 +494,11 @@ rm -rf ~/.claude/cc-quota-guard ~/.claude/.cc-quota-cache.json ~/.local/bin/cc-r
 
 ## Contributing
 
-Issues and PRs welcome. If you change the quota-detection or revert logic,
-keep the "fail open, opt in to anything destructive, document the
-limitation" style — that's the whole point of this tool. Run `pytest
-tests/` and `bash tests/test_cc_run.sh` before opening a PR (see
-[CHANGELOG.md](CHANGELOG.md) for what's already shipped).
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+running the test suite, and the design principles a PR touching the
+quota-detection or revert logic is expected to follow ("fail open, opt in
+to anything destructive, document the limitation"). See
+[CHANGELOG.md](CHANGELOG.md) for what's already shipped.
 
 ## License
 

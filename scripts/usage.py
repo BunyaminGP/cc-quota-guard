@@ -5,7 +5,22 @@ usage.py — Claude Code usage (rate-limit) reader.
 Source: Anthropic's UNDOCUMENTED OAuth usage endpoint:
     GET https://api.anthropic.com/api/oauth/usage
     headers: Authorization: Bearer <token>, anthropic-beta: oauth-2025-04-20
-Token: ~/.claude/.credentials.json -> .claudeAiOauth.accessToken
+
+Token, checked in this order (see _read_token()):
+  1. CLAUDE_CODE_OAUTH_TOKEN env var (matches Claude Code's own precedence
+     — used for `claude setup-token` long-lived tokens and SSH/headless
+     setups; works identically on every platform).
+  2. ~/.claude/.credentials.json -> .claudeAiOauth.accessToken (primary
+     storage on Linux/Windows; confirmed via Claude Code's own docs).
+  3. macOS only, when #2's file doesn't exist: the system Keychain,
+     service name "Claude Code-credentials" (confirmed via Claude Code's
+     docs and community bug reports — macOS's primary storage is the
+     Keychain, not the file, and at least one reported Claude Code
+     version actively deletes the file once Keychain is in use). Read via
+     the `security` CLI (built into every Mac, no new dependency) —
+     **implemented from documented behavior, not yet verified against a
+     real macOS install**, since this project has no Mac to test with;
+     see README's Honest warnings section.
 
 This endpoint is unofficial; Anthropic can change or remove it without
 notice. That's why get_usage() raises on any problem, and the caller is
@@ -31,6 +46,7 @@ CLI:
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -52,24 +68,62 @@ API_URL = "https://api.anthropic.com/api/oauth/usage"
 API_TIMEOUT = float(os.environ.get("CC_USAGE_TIMEOUT", "8"))
 
 
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+
+def _read_token_from_keychain():
+    """
+    macOS only: reads the OAuth credentials JSON out of the system
+    Keychain via the `security` CLI (built into every Mac — no new
+    dependency, same approach as quota_gate.py already shelling out to
+    `git`). Raises on any failure, same contract as _read_token() itself,
+    so the caller's existing fail-open handling covers this path too.
+
+    Implemented from Claude Code's own documented behavior and community
+    bug reports (the service name "Claude Code-credentials" is confirmed
+    from both), NOT yet verified against a real macOS install — this
+    project has no Mac to test with. If this is wrong for your installed
+    Claude Code version, `python3 usage.py --probe` will show exactly
+    where it fails; please open an issue with that output.
+    """
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "macOS Keychain lookup failed for service "
+            f"'{KEYCHAIN_SERVICE}': {(result.stderr or '').strip() or 'unknown error'}"
+        )
+    creds = json.loads(result.stdout)
+    tok = (creds.get("claudeAiOauth") or {}).get("accessToken")
+    if not tok:
+        raise RuntimeError("accessToken not found in macOS Keychain entry")
+    return tok
+
+
 def _read_token():
+    # 1) CLAUDE_CODE_OAUTH_TOKEN env var — matches Claude Code's own
+    # precedence (used for `claude setup-token` long-lived tokens and
+    # SSH/headless setups), works identically on every platform, no
+    # file/Keychain access needed at all.
+    env_tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if env_tok:
+        return env_tok
+
+    # 2) The credentials file — primary storage on Linux/Windows, and
+    # still checked first on macOS too (some setups sync Keychain to this
+    # file, e.g. for SSH access — see README).
     try:
         with open(CREDENTIALS_FILE, "r") as f:
             creds = json.load(f)
     except FileNotFoundError:
-        # Unverified on a real macOS install: Claude Code may store the
-        # OAuth token in the system Keychain instead of writing this file
-        # at all, in which case this tool has nothing to read and silently
-        # fails open (zero quota protection, no error shown to the user
-        # anywhere except this CLI). Only the CLI path (usage.py run
-        # directly) ever surfaces this message; quota_gate.py's caller
-        # still just catches the exception and fails open as always.
-        raise RuntimeError(
-            f"credentials file not found: {CREDENTIALS_FILE} "
-            "(on macOS, Claude Code may store the OAuth token in the system "
-            "Keychain instead of this file, which this tool doesn't read — "
-            "see the README's Requirements section)"
-        )
+        # 3) macOS Keychain fallback — see _read_token_from_keychain()'s
+        # docstring for what's confirmed vs. unverified here.
+        if sys.platform == "darwin":
+            return _read_token_from_keychain()
+        raise RuntimeError(f"credentials file not found: {CREDENTIALS_FILE}")
+
     tok = (creds.get("claudeAiOauth") or {}).get("accessToken")
     if not tok:
         raise RuntimeError("accessToken not found (you may be using the macOS keychain instead)")

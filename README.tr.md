@@ -188,7 +188,10 @@ CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1
    - **Her** çağrıda: SERT eşikleri kontrol eder. Bir maddenin içindeki iş
      (birçok Edit/Bash/Write çağrısı) tek bir planlama-aracı çağrısından
      sonra uzun sürebilir; sadece orada bakmak bir kota patlamasını çok geç
-     fark ettirir.
+     fark ettirir. Planınız haftalık toplamdan ayrı, sadece Sonnet'e özel
+     7 günlük bir rakam raporluyorsa, o da aynı `weekly_soft`/`weekly_hard`
+     eşiklerine karşı kontrol edilir — yoğun Sonnet kullanan bir oturum,
+     toplam haftalık kota hâlâ rahat görünürken o kapasiteyi tüketebilirdi.
 2. **State dosyaları**
    - `.cc-quota/progress.md` — ne bitti, sırada ne var, ve (sert geri alma
      tetiklendiyse) hangi madde geri alındı. Reset sonrası buradan devam
@@ -316,11 +319,12 @@ olması makul değil. Açmadan önce bilmeniz gerekenler:
 - `bash`, `python3`
 - Claude Code CLI (`claude`), Pro/Max **aboneliği** (OAuth login) — bu aracın
   okuduğu usage endpoint'i sadece bu faturalandırma modunda var
-- `~/.claude/.credentials.json` içinde geçerli bir OAuth token (Claude
-  Code'a giriş yapınca otomatik oluşur). **macOS'te doğrulanmadı:**
-  kurulumunuz bunu bu dosya yerine sistem Keychain'inde tutuyorsa, bu araç
-  okuyacak bir şey bulamaz ve sessizce fail-open olur (bkz.
-  [Dürüst uyarılar](#dürüst-uyarılar)).
+- Geçerli bir OAuth token — `CLAUDE_CODE_OAUTH_TOKEN` ayarlıysa oradan,
+  yoksa `~/.claude/.credentials.json`'dan (Claude Code'a giriş yapınca
+  otomatik oluşur), yoksa macOS'a özel olarak, bu dosya yoksa sistem
+  Keychain'inden (bkz. [Dürüst uyarılar](#dürüst-uyarılar) — Keychain yolu
+  Claude Code'un kendi belgelenen davranışından uygulandı, gerçek bir
+  Mac'te henüz doğrulanmadı).
 - `--enable-hard-abort` kullanmayı planlıyorsanız git
 
 ### Bu araç, kullanım-başı ödeme (API key) faturalandırmasında hiçbir şey yapmaz
@@ -378,15 +382,15 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
   Güncel bayraklar için `claude --help`'e bakın — zamanla değişebilir.
 - **Plan.** Usage endpoint Pro/Max'te çalışır. Farklı bir planda `--probe`
   boş/farklı dönebilir.
-- **macOS Keychain depolaması doğrulanmadı.** `scripts/usage.py` sadece
-  `~/.claude/.credentials.json`'ı okur. Claude Code kurulumunuz OAuth
-  token'ı bunun yerine sistem Keychain'inde tutuyorsa (bu proje gerçek bir
-  Mac'te bunun ne zaman/olup olmadığını doğrulamadı), dosya basitçe
-  bulunmaz ve bu araç sessizce sıfır korumayla fail-open olur — diğer her
-  usage-okuma hatası gibi. `python3 scripts/usage.py` çalıştırıp kontrol
-  edin; credentials dosyasının bulunamadığını raporluyorsa durum budur.
-  Buna denk gelirseniz lütfen bir issue açın — Keychain erişimi eklenmesi
-  gerekir.
+- **macOS Keychain fallback'i uygulandı ama gerçek donanımda henüz
+  doğrulanmadı.** `scripts/usage.py` sırasıyla `CLAUDE_CODE_OAUTH_TOKEN`'a,
+  `~/.claude/.credentials.json`'a, sonra — macOS'ta, o dosya yoksa —
+  `security find-generic-password -s "Claude Code-credentials" -w`
+  komutuyla sistem Keychain'ine bakar. Servis adı ve genel davranış Claude
+  Code'un kendi dokümantasyonundan ve herkese açık bug raporlarından
+  doğrulandı, gerçek bir Mac'te çalıştırılarak değil (bu projede Mac yok).
+  Kurulumunuzda çalışmazsa `python3 scripts/usage.py --probe` nerede
+  başarısız olduğunu gösterir — lütfen o çıktıyla bir issue açın.
 
 ## Ayarlar
 
@@ -499,11 +503,11 @@ rm -rf ~/.claude/cc-quota-guard ~/.claude/.cc-quota-cache.json ~/.local/bin/cc-r
 
 ## Katkı
 
-Issue ve PR'lar açık. Kota tespiti ya da geri alma mantığını değiştirirken
-"fail-open, yıkıcı olan her şeye opt-in, sınırlamayı belgele" tarzını koruyun
-— aracın bütün amacı bu. PR açmadan önce `pytest tests/` ve
-`bash tests/test_cc_run.sh` çalıştırın (neyin zaten yayınlandığı için
-[CHANGELOG.md](CHANGELOG.md)'ye bakın).
+Issue ve PR'lar açık — kurulum, test suite'ini çalıştırma ve kota tespiti/
+geri alma mantığına dokunan bir PR'dan beklenen tasarım ilkeleri
+("fail-open, yıkıcı olan her şeye opt-in, sınırlamayı belgele") için
+[CONTRIBUTING.md](CONTRIBUTING.md)'ye bakın (İngilizce). Neyin zaten
+yayınlandığı için [CHANGELOG.md](CHANGELOG.md)'ye bakın.
 
 ## Lisans
 
