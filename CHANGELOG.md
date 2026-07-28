@@ -6,6 +6,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-28
+
 ### Added
 - **Push notifications** (`scripts/notify.py`): optional webhook POST at
   the moments that matter — a SOFT/HARD threshold stopping Claude,
