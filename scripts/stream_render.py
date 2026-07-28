@@ -71,6 +71,22 @@ def main():
                     print(f"   [tool] {block.get('name', '?')}", flush=True)
 
         elif etype == "result":
+            # `claude` can exit 0 even when the round didn't actually
+            # finish the task (e.g. subtype "error_max_turns" or
+            # "error_during_execution") — cc-run's retry logic only looks
+            # at the process exit code, so it can't tell a real success
+            # apart from this either; it just logs "ended on its own" and
+            # stops the whole unattended run. Without this line, this
+            # script would print the same cost summary either way, leaving
+            # no visible sign anything went wrong.
+            is_error = bool(event.get("is_error"))
+            subtype = event.get("subtype")
+            if is_error or (subtype and subtype != "success"):
+                print(
+                    f"⚠️  [cc-run] round ended abnormally (subtype={subtype or 'unknown'}) "
+                    "— not a quota stop; check the output above",
+                    flush=True,
+                )
             usage = event.get("modelUsage") or {}
             models = ", ".join(usage.keys()) if usage else event.get("model", "unknown")
             cost = event.get("total_cost_usd")

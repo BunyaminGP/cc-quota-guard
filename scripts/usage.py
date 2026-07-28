@@ -53,8 +53,23 @@ API_TIMEOUT = float(os.environ.get("CC_USAGE_TIMEOUT", "8"))
 
 
 def _read_token():
-    with open(CREDENTIALS_FILE, "r") as f:
-        creds = json.load(f)
+    try:
+        with open(CREDENTIALS_FILE, "r") as f:
+            creds = json.load(f)
+    except FileNotFoundError:
+        # Unverified on a real macOS install: Claude Code may store the
+        # OAuth token in the system Keychain instead of writing this file
+        # at all, in which case this tool has nothing to read and silently
+        # fails open (zero quota protection, no error shown to the user
+        # anywhere except this CLI). Only the CLI path (usage.py run
+        # directly) ever surfaces this message; quota_gate.py's caller
+        # still just catches the exception and fails open as always.
+        raise RuntimeError(
+            f"credentials file not found: {CREDENTIALS_FILE} "
+            "(on macOS, Claude Code may store the OAuth token in the system "
+            "Keychain instead of this file, which this tool doesn't read — "
+            "see the README's Requirements section)"
+        )
     tok = (creds.get("claudeAiOauth") or {}).get("accessToken")
     if not tok:
         raise RuntimeError("accessToken not found (you may be using the macOS keychain instead)")

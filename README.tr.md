@@ -19,9 +19,10 @@ Normalde limit dolduğu an Claude Code aniden durur — neredeyse, yarım kalmı
 düzenlemeler, hiçbir kayıt olmadan. Bu araç limite *toslamadan önce*, siz
 hangi noktada ve nasıl durmasını istiyorsanız öyle durur:
 
-- **YUMUŞAK eşik** (varsayılan 5 saatlik session'ın %80'i): hâlâ pay var —
+- **YUMUŞAK eşik** (varsayılan %80 session / %97 haftalık): hâlâ pay var —
   Claude mevcut todo maddesini bitirir, sonra temiz kapanış yapar (commit +
-  ilerleme notu) ve durur.
+  ilerleme notu) ve durur. Session ve haftalık birbirinden bağımsız
+  katmanlardır — ikisinden biri diğerinden bağımsız tetiklenebilir.
 - **SERT eşik** (varsayılan %95 session / %98 haftalık): madde ortasında bile
   tetiklenebilir, çünkü o noktada güvenle bitirecek pay kalmamış olabilir.
   **Varsayılan olarak kapalı.** Açarsanız, Claude'un o maddede yaptığı
@@ -66,6 +67,7 @@ tanımlanıyor:
 
 - **Yumuşak eşik — session (%)** — varsayılan 80
 - **Sert eşik — session (%)** — varsayılan 95
+- **Yumuşak eşik — haftalık (%)** — varsayılan 97
 - **Sert eşik — haftalık (%)** — varsayılan 98
 - **Sert eşikte otomatik geri almayı (git stash) aç** — varsayılan kapalı
 
@@ -131,13 +133,15 @@ Tam otomatik (dur + reset'te otomatik devam):
 
 ```bash
 cc-run "auth servisini 3 adımda refactor et: ..."
-cc-run --threshold 80 --session-hard 95 --weekly-hard 98 @gorev.md
+cc-run --threshold 80 --session-hard 95 --weekly-soft 97 --weekly-hard 98 @gorev.md
 ```
 
 - `--threshold N` — session **YUMUŞAK** eşiği (varsayılan 80). Madde biter,
   sonra durur.
 - `--session-hard N` — session **SERT** eşiği (varsayılan 95). Madde
   ortasında tetiklenebilir.
+- `--weekly-soft N` — haftalık **YUMUŞAK** eşik (varsayılan 97). Madde biter,
+  sonra durur.
 - `--weekly-hard N` — haftalık **SERT** eşik (varsayılan 98). Madde
   ortasında tetiklenebilir.
 - `--enable-hard-abort` — SERT eşik tetiklendiğinde madde ortasındaki işi
@@ -162,7 +166,7 @@ Sadece "temiz dur" (wrapper'sız, etkileşimli oturum): hook'lar kurulu olduğu
 için normal `claude` oturumu da eşiklere gelince durur — ama otomatik devam
 etmez, reset sonrası `claude -c`'yi kendiniz çalıştırırsınız. Bu modda
 eşikleri ortam değişkeniyle verin: `CC_SESSION_SOFT=80 CC_SESSION_HARD=95
-CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
+CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
 
 ## Nasıl çalışır
 
@@ -172,8 +176,10 @@ CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
    - Bir `TodoWrite` çağrısında — ya da bazı Claude Code sürümlerinin onun
      yerine kullandığı `TaskCreate`/`TaskUpdate`/`TaskList` çağrılarından
      birinde: hangi maddenin `in_progress` olduğunu ve hangi commit'ten
-     başladığını `.cc-quota/todos_state.json`'a kaydeder; YUMUŞAK eşiği
-     kontrol eder. İki araç ailesi de tanınıyor çünkü birbirinin yerine
+     başladığını `.cc-quota/todos_state.json`'a kaydeder; YUMUŞAK eşikleri
+     kontrol eder (session ve haftalık birbirinden bağımsız katmanlardır,
+     ikisinden biri tek başına tetiklenebilir). İki araç ailesi de tanınıyor
+     çünkü birbirinin yerine
      geçmiyorlar — sadece birini tanıyan bir eklenti, diğerini kullanan bir
      Claude Code sürümünde YUMUŞAK eşiğin (ve hard-abort'un in_progress
      takibinin) hiç tetiklenmediğini fark bile etmezdi.
@@ -244,7 +250,7 @@ olması makul değil. Açmadan önce bilmeniz gerekenler:
   dosyalarının her okumasından) önce bunu kontrol eder, symlink'i takip
   etmek yerine reddeder.
 - **Yüzde eşikleri sınırlanır.** `session_soft` / `session_hard` /
-  `weekly_hard`, hangi kaynaktan gelirse gelsin (plugin config,
+  `weekly_soft` / `weekly_hard`, hangi kaynaktan gelirse gelsin (plugin config,
   `.cc-quota/config.json`, `CC_*` ortam değişkenleri), yalnızca `(0, 100]`
   aralığında kabul edilir. Bu, klonlanan bir repo'nun `config.json`'ının
   örneğin `session_hard: 99999` vererek korumayı etkisizleştirmesini, ya da
@@ -263,7 +269,10 @@ olması makul değil. Açmadan önce bilmeniz gerekenler:
 - Claude Code CLI (`claude`), Pro/Max **aboneliği** (OAuth login) — bu aracın
   okuduğu usage endpoint'i sadece bu faturalandırma modunda var
 - `~/.claude/.credentials.json` içinde geçerli bir OAuth token (Claude
-  Code'a giriş yapınca otomatik oluşur)
+  Code'a giriş yapınca otomatik oluşur). **macOS'te doğrulanmadı:**
+  kurulumunuz bunu bu dosya yerine sistem Keychain'inde tutuyorsa, bu araç
+  okuyacak bir şey bulamaz ve sessizce fail-open olur (bkz.
+  [Dürüst uyarılar](#dürüst-uyarılar)).
 - `--enable-hard-abort` kullanmayı planlıyorsanız git
 
 ### Bu araç, kullanım-başı ödeme (API key) faturalandırmasında hiçbir şey yapmaz
@@ -321,6 +330,15 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
   Güncel bayraklar için `claude --help`'e bakın — zamanla değişebilir.
 - **Plan.** Usage endpoint Pro/Max'te çalışır. Farklı bir planda `--probe`
   boş/farklı dönebilir.
+- **macOS Keychain depolaması doğrulanmadı.** `scripts/usage.py` sadece
+  `~/.claude/.credentials.json`'ı okur. Claude Code kurulumunuz OAuth
+  token'ı bunun yerine sistem Keychain'inde tutuyorsa (bu proje gerçek bir
+  Mac'te bunun ne zaman/olup olmadığını doğrulamadı), dosya basitçe
+  bulunmaz ve bu araç sessizce sıfır korumayla fail-open olur — diğer her
+  usage-okuma hatası gibi. `python3 scripts/usage.py` çalıştırıp kontrol
+  edin; credentials dosyasının bulunamadığını raporluyorsa durum budur.
+  Buna denk gelirseniz lütfen bir issue açın — Keychain erişimi eklenmesi
+  gerekir.
 
 ## Ayarlar
 
@@ -330,19 +348,21 @@ Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 1. **`CC_*` ortam değişkenleri** — açık, tek seferlik override (`cc-run`
    bayraklarını elle verdiğinizde ya da manuel `export` ile)
 2. **`.cc-quota/config.json`** (proje bazlı) — `session_soft`,
-   `session_hard`, `weekly_hard`, `language` anahtarları (`hard_abort_enabled`
-   **hariç** — bu anahtarın bu dosyadan bilerek dışlanma sebebi için
+   `session_hard`, `weekly_soft`, `weekly_hard`, `language` anahtarları
+   (`hard_abort_enabled` **hariç** — bu anahtarın bu dosyadan bilerek
+   dışlanma sebebi için
    [Güvenlik](#güvenlik--hard-abort-açmadan-önce-okuyun) bölümüne bakın)
 3. **Plugin'in yapılandırma ekranı** (yukarıda) — 1 ya da 2'yi vermediğiniz
    her yerde geçerli olan kişisel varsayılanınız
 
-Üçü de hiçbir yerde ayarlanmadıysa sabit varsayılan devreye girer: 80 / 95
-/ 98 / geri alma kapalı.
+Üçü de hiçbir yerde ayarlanmadıysa sabit varsayılan devreye girer:
+80 / 95 / 97 / 98 / geri alma kapalı.
 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
 | `CC_SESSION_SOFT` | 80 | Session YUMUŞAK eşiği (%) — madde biter, sonra durur |
 | `CC_SESSION_HARD` | 95 | Session SERT eşiği (%) — madde ortasında tetiklenebilir |
+| `CC_WEEKLY_SOFT` | 97 | Haftalık YUMUŞAK eşik (%) — madde biter, sonra durur |
 | `CC_WEEKLY_HARD` | 98 | Haftalık SERT eşik (%) — madde ortasında tetiklenebilir |
 | `CC_HARD_ABORT` | (kapalı) | SERT eşikte otomatik geri almayı (`git stash`) açar. `cc-run --enable-hard-abort` ile aynı |
 | `CC_USAGE_CACHE_TTL` | 30 | Kota cache süresi (sn) — aynı zamanda sert eşik tespit gecikmesi |

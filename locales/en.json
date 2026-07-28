@@ -12,7 +12,7 @@
   "hard_abort_on_nogit": "⚠️  [cc-run] --enable-hard-abort passed but this isn't a git repo: hard-abort will fall back to a clean stop.",
   "hard_abort_off": "→ [cc-run] hard-abort not forced here — using your plugin/project configuration (built-in default: off).",
   "archived_progress": "ℹ️  [cc-run] Previous run's finished progress.md archived (this project already had a completed run here).",
-  "starting": "▶️  [cc-run] Starting (soft={soft}%, hard-session={hard_session}%, hard-weekly={hard_weekly}%, model={model})",
+  "starting": "▶️  [cc-run] Starting (soft={soft}%, hard-session={hard_session}%, weekly-soft={weekly_soft}%, hard-weekly={hard_weekly}%, model={model})",
   "resuming": "▶️  [cc-run] Resuming where it left off (round {iter})",
   "still_working_item": "⏳ [cc-run] still working ({waited}s) — current item: {item}",
   "still_working": "⏳ [cc-run] still working ({waited}s)",

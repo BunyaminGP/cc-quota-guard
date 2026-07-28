@@ -7,13 +7,14 @@ via `tool_name` rather than needing a second matcher registration:
   - On a TodoWrite call — OR, on Claude Code versions that plan this way
     instead, a TaskCreate/TaskUpdate/TaskList call — records the task list
     to `.cc-quota/todos_state.json` (which item is in_progress, and which
-    git commit it started from) and checks the SOFT threshold (finish the
-    current item, then stop cleanly). Supporting both tool families matters
-    because they're not interchangeable at the API level: TodoWrite sends
-    the whole list, with statuses, in one call every time; TaskCreate/
+    git commit it started from) and checks the SOFT thresholds — session
+    and weekly are independent tiers, either can fire on its own (finish
+    the current item, then stop cleanly). Supporting both tool families
+    matters because they're not interchangeable at the API level: TodoWrite
+    sends the whole list, with statuses, in one call every time; TaskCreate/
     TaskUpdate are granular CRUD calls spread over many tool calls, with no
     single call carrying the full picture — see _save_task_tool_state().
-    Recognizing only one of these two families means the SOFT threshold and
+    Recognizing only one of these two families means the SOFT thresholds and
     the in_progress bookkeeping (used for hard-abort revert) silently never
     fire on whichever family isn't recognized, no matter how high usage
     gets, since the specific call being watched for simply never happens.
@@ -219,6 +220,7 @@ def _load_config(proj):
     cfg = {
         "session_soft": 80.0,
         "session_hard": 95.0,
+        "weekly_soft": 97.0,
         "weekly_hard": 98.0,
         "hard_abort_enabled": False,
         "language": "en",
@@ -227,6 +229,7 @@ def _load_config(proj):
     plugin_option_map = {
         "CLAUDE_PLUGIN_OPTION_SESSION_SOFT": "session_soft",
         "CLAUDE_PLUGIN_OPTION_SESSION_HARD": "session_hard",
+        "CLAUDE_PLUGIN_OPTION_WEEKLY_SOFT": "weekly_soft",
         "CLAUDE_PLUGIN_OPTION_WEEKLY_HARD": "weekly_hard",
     }
     for env, key in plugin_option_map.items():
@@ -254,7 +257,7 @@ def _load_config(proj):
     try:
         with open(cfg_path) as f:
             fc = json.load(f)
-        for k in ("session_soft", "session_hard", "weekly_hard"):
+        for k in ("session_soft", "session_hard", "weekly_soft", "weekly_hard"):
             if k in fc:
                 parsed = _parse_pct(fc[k])
                 if parsed is not None:
@@ -269,6 +272,7 @@ def _load_config(proj):
     env_map = {
         "CC_SESSION_SOFT": "session_soft",
         "CC_SESSION_HARD": "session_hard",
+        "CC_WEEKLY_SOFT": "weekly_soft",
         "CC_WEEKLY_HARD": "weekly_hard",
     }
     for env, key in env_map.items():
@@ -423,7 +427,12 @@ def _save_task_tool_state(proj, tool_name, tool_input, tool_response, is_git):
     if tool_name == "TaskCreate":
         task = (tool_response or {}).get("task") or {}
         task_id = task.get("id")
-        subject = task.get("subject") or tool_input.get("subject")
+        # Falls back to a placeholder (matches the TaskUpdate branch below)
+        # rather than storing None: content is later matched by equality
+        # against aborted_item in _do_hard_stop's revert bookkeeping, and a
+        # stored None would both defeat that match and (pre-fix) crash the
+        # `aborted_item[:60]` slice there if this task became in_progress.
+        subject = task.get("subject") or tool_input.get("subject") or f"task {task_id}"
         if task_id is not None and find(task_id) is None:
             todos.append({"id": task_id, "content": subject, "status": "pending"})
 
@@ -581,7 +590,13 @@ def _sanitize_state_for_revert(proj, state, is_git):
 
 def _do_hard_stop(proj, which, pct, resets_at, thr, state, is_git, hard_abort_enabled, lang="en"):
     in_progress = (state or {}).get("in_progress")
-    aborted_item = in_progress.get("content") if in_progress else None
+    # Falls back to a placeholder rather than None: a task recorded with no
+    # subject (e.g. a TaskCreate call whose tool_response/tool_input both
+    # omitted it — see _save_task_tool_state) would otherwise leave
+    # aborted_item as None here, and aborted_item[:60] below would raise
+    # TypeError — crashing the hook mid hard-abort, the one path this
+    # project's fail-open design can least afford to break.
+    aborted_item = (in_progress.get("content") if in_progress else None) or "(unnamed item)"
     stash_created = False
     did_revert = False
 
@@ -729,7 +744,20 @@ def main():
     tool_name = hook_input.get("tool_name") or hook_input.get("tool") or ""
     tool_input = hook_input.get("tool_input") or {}
     tool_response = hook_input.get("tool_response") or {}
-    is_git = _is_git_repo(proj)
+
+    # Lazy + memoized rather than computed unconditionally: _is_git_repo()
+    # spawns a git subprocess, and most tool calls (a plain Edit/Bash/Read,
+    # comfortably under every threshold) never actually need the answer —
+    # only the TodoWrite/Task* state-tracking branch below and the HARD
+    # checks further down do. Memoized so the handful of call sites that DO
+    # need it within a single hook invocation still only spawn git once, same
+    # as the old unconditional version did.
+    _is_git_cache = {}
+
+    def is_git():
+        if "v" not in _is_git_cache:
+            _is_git_cache["v"] = _is_git_repo(proj)
+        return _is_git_cache["v"]
 
     # Some Claude Code versions plan with TaskCreate/TaskUpdate/TaskList
     # instead of TodoWrite. If this only ever recognized TodoWrite, the SOFT
@@ -739,9 +767,9 @@ def main():
     if tool_name == "TodoWrite":
         todos = tool_input.get("todos") or []
         if todos:
-            state = _save_todos_state(proj, todos, is_git)
+            state = _save_todos_state(proj, todos, is_git())
     elif tool_name in ("TaskCreate", "TaskUpdate", "TaskList"):
-        state = _save_task_tool_state(proj, tool_name, tool_input, tool_response, is_git)
+        state = _save_task_tool_state(proj, tool_name, tool_input, tool_response, is_git())
 
     if usage is None:
         _allow()  # fail-open: module couldn't be imported
@@ -761,19 +789,23 @@ def main():
     # by git (see _sanitize_state_for_revert()).
     if s_pct is not None and s_pct >= cfg["session_hard"]:
         _do_hard_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_hard"],
-                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"],
+                      _sanitize_state_for_revert(proj, state, is_git()), is_git(), cfg["hard_abort_enabled"],
                       cfg["language"])
     if w_pct is not None and w_pct >= cfg["weekly_hard"]:
         _do_hard_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_hard"],
-                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"],
+                      _sanitize_state_for_revert(proj, state, is_git()), is_git(), cfg["hard_abort_enabled"],
                       cfg["language"])
 
-    # SOFT threshold — only checked at item boundaries: a TodoWrite call, or
+    # SOFT thresholds — only checked at item boundaries: a TodoWrite call, or
     # (on Claude Code versions that plan this way instead) a
-    # TaskCreate/TaskUpdate/TaskList call.
-    if tool_name in ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList") \
-            and s_pct is not None and s_pct >= cfg["session_soft"]:
-        _do_soft_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_soft"], cfg["language"])
+    # TaskCreate/TaskUpdate/TaskList call. Session and weekly are independent
+    # tiers, same as their HARD counterparts above; either can fire on its
+    # own.
+    if tool_name in ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList"):
+        if s_pct is not None and s_pct >= cfg["session_soft"]:
+            _do_soft_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_soft"], cfg["language"])
+        if w_pct is not None and w_pct >= cfg["weekly_soft"]:
+            _do_soft_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_soft"], cfg["language"])
 
     _allow()
 

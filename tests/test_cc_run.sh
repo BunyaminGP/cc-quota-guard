@@ -169,6 +169,42 @@ else
   fail "expected Turkish output from config.json alone; got: $OUT"
 fi
 
+echo "=== 8) a non-quota error round (exit 0, is_error result) shows a visible warning ==="
+new_scenario error_round_visible
+cat > "$SCENARIO_DIR/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+# Simulates claude exiting 0 (success from the process's point of view)
+# even though the round itself failed for a non-quota reason (e.g. hit its
+# own max-turns limit) — the scenario stream_render.py's is_error/subtype
+# check exists for, since cc-run's retry logic can't distinguish this exit
+# code from a real "nothing left to do" finish either.
+echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+echo '{"type":"result","subtype":"error_max_turns","is_error":true,"total_cost_usd":0.01}'
+SH
+chmod +x "$SCENARIO_DIR/fakebin/claude"
+OUT=$(cd "$SCENARIO_DIR/proj" && PATH="$SCENARIO_DIR/fakebin:$PATH" bash "$CC_RUN" "task" 2>&1)
+if echo "$OUT" | grep -q "round ended abnormally" && echo "$OUT" | grep -q "ended the turn on its own"; then
+  pass "non-quota error round rendered a visible warning before cc-run reported ended-on-its-own"
+else
+  fail "expected a visible error-round warning; got: $OUT"
+fi
+
+echo "=== 9) --weekly-soft is parsed, exported, and shown in the starting line ==="
+new_scenario weekly_soft_flag
+cat > "$SCENARIO_DIR/fakebin/claude" <<SH
+#!/usr/bin/env bash
+if [[ -z "\${CC_WEEKLY_SOFT:-}" ]]; then echo "CC_WEEKLY_SOFT not exported" >&2; exit 1; fi
+mkdir -p "$(to_py "$SCENARIO_DIR")/proj/.cc-quota"
+echo "CC_QUOTA_DONE" >> "$(to_py "$SCENARIO_DIR")/proj/.cc-quota/progress.md"
+SH
+chmod +x "$SCENARIO_DIR/fakebin/claude"
+OUT=$(cd "$SCENARIO_DIR/proj" && PATH="$SCENARIO_DIR/fakebin:$PATH" bash "$CC_RUN" --weekly-soft 90 "task" 2>&1)
+if echo "$OUT" | grep -q "weekly-soft=90%" && echo "$OUT" | grep -q "Task complete"; then
+  pass "--weekly-soft 90 exported CC_WEEKLY_SOFT and appeared in the starting line"
+else
+  fail "expected weekly-soft=90% in the starting line and a clean finish; got: $OUT"
+fi
+
 echo
 echo "--- bin/cc-run syntax check ---"
 if bash -n "$CC_RUN"; then

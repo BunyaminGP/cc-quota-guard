@@ -16,9 +16,10 @@ Normally, the moment your Claude Code quota runs out, the session just stops
 — wherever it happened to be, edits half-made, nothing recorded. This tool
 stops *before* that, at a point you choose, and in a way you choose:
 
-- **SOFT threshold** (default 80% of the 5-hour session): there's still
+- **SOFT threshold** (default 80% session / 97% weekly): there's still
   headroom, so Claude finishes the current todo item, then wraps up cleanly
-  (commit + write progress notes) before stopping.
+  (commit + write progress notes) before stopping. Session and weekly are
+  independent tiers — either can fire on its own.
 - **HARD threshold** (default 95% session / 98% weekly): can fire mid-item,
   when there may not be enough headroom left to finish safely. **Off by
   default.** If you opt in, Claude's in-progress changes on that item are
@@ -63,6 +64,7 @@ plugin's `userConfig`:
 
 - **Soft threshold — session (%)** — default 80
 - **Hard threshold — session (%)** — default 95
+- **Soft threshold — weekly (%)** — default 97
 - **Hard threshold — weekly (%)** — default 98
 - **Enable auto-revert (git stash) on the hard threshold** — default off
 
@@ -126,13 +128,15 @@ Fully automatic (stop + auto-resume at reset):
 
 ```bash
 cc-run "refactor the auth service in 3 steps: ..."
-cc-run --threshold 80 --session-hard 95 --weekly-hard 98 @task.md
+cc-run --threshold 80 --session-hard 95 --weekly-soft 97 --weekly-hard 98 @task.md
 ```
 
 - `--threshold N` — session **SOFT** threshold (default 80). Finishes the
   current item, then stops.
 - `--session-hard N` — session **HARD** threshold (default 95). Can fire
   mid-item.
+- `--weekly-soft N` — weekly **SOFT** threshold (default 97). Finishes the
+  current item, then stops.
 - `--weekly-hard N` — weekly **HARD** threshold (default 98). Can fire
   mid-item.
 - `--enable-hard-abort` — opt in to auto-reverting the in-progress item
@@ -157,8 +161,8 @@ Just "stop cleanly" (no wrapper, interactive session): since the hooks are
 installed, a normal `claude` session also stops cleanly at the thresholds —
 but it won't auto-resume; you run `claude -c` yourself after the reset. Set
 thresholds for this mode with environment variables: `CC_SESSION_SOFT=80
-CC_SESSION_HARD=95 CC_WEEKLY_HARD=98`, and `CC_HARD_ABORT=1` to opt into
-auto-revert.
+CC_SESSION_HARD=95 CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98`, and `CC_HARD_ABORT=1`
+to opt into auto-revert.
 
 ## How it works
 
@@ -168,7 +172,8 @@ auto-revert.
    - On a `TodoWrite` call — or, on Claude Code versions that plan with
      `TaskCreate`/`TaskUpdate`/`TaskList` instead, one of those — records
      which item is `in_progress` and which git commit it started from, into
-     `.cc-quota/todos_state.json`; checks the SOFT threshold. Both tool
+     `.cc-quota/todos_state.json`; checks the SOFT thresholds (session and
+     weekly are independent tiers, either can fire on its own). Both tool
      families are recognized because they're not interchangeable: a plugin
      that only understood one of them would have its SOFT threshold (and
      hard-abort's in-progress tracking) silently never fire on whichever
@@ -237,7 +242,7 @@ just installed. A few things to know before you turn it on:
   before every write (and refuses instead of following it) and before every
   read of its own state files.
 - **Percentage thresholds are clamped.** `session_soft` / `session_hard` /
-  `weekly_hard`, from any source (plugin config, `.cc-quota/config.json`,
+  `weekly_soft` / `weekly_hard`, from any source (plugin config, `.cc-quota/config.json`,
   `CC_*` env vars), are only accepted in `(0, 100]`. This stops a cloned
   repo's `config.json` from setting e.g. `session_hard: 99999` to
   effectively disable the guard, or `session_soft: 0` to block every single
@@ -255,7 +260,9 @@ just installed. A few things to know before you turn it on:
 - Claude Code CLI (`claude`), Pro/Max **subscription** (OAuth login) — the
   usage endpoint this tool reads only exists for that billing mode
 - A valid OAuth token in `~/.claude/.credentials.json` (created automatically
-  when you log into Claude Code)
+  when you log into Claude Code). **Unverified on macOS:** if your install
+  stores this in the system Keychain instead of that file, this tool has
+  nothing to read and quietly fails open (see [Honest warnings](#honest-warnings)).
 - git, only if you plan to use `--enable-hard-abort`
 
 ### This tool does nothing on pay-as-you-go (API key) billing
@@ -314,6 +321,14 @@ Anthropic likely changed the schema — update the field names in
   change.
 - **Plan.** The usage endpoint works on Pro/Max. On a different plan,
   `--probe` may return nothing or something different.
+- **macOS Keychain storage is unverified.** `scripts/usage.py` only reads
+  `~/.claude/.credentials.json`. If your Claude Code install keeps the OAuth
+  token in the system Keychain instead (this project hasn't confirmed
+  whether/when that happens on a real Mac), the file simply won't exist and
+  this tool fails open with zero protection — silently, same as any other
+  usage-read failure. Run `python3 scripts/usage.py` to check; if it reports
+  a missing credentials file, that's what's happening. Please open an issue
+  if you hit this — it would need Keychain access added.
 
 ## Settings
 
@@ -323,19 +338,21 @@ There are three places to set the thresholds, checked in this order —
 1. **`CC_*` environment variables** — an explicit, one-off override (what
    `cc-run` flags set when you actually pass them, or a manual `export`)
 2. **`.cc-quota/config.json`** (per-project) — keys `session_soft`,
-   `session_hard`, `weekly_hard`, `language` (**not** `hard_abort_enabled` —
-   see [Safety](#safety--read-this-before-enabling-hard-abort) for why that
+   `session_hard`, `weekly_soft`, `weekly_hard`, `language` (**not**
+   `hard_abort_enabled` — see
+   [Safety](#safety--read-this-before-enabling-hard-abort) for why that
    one is deliberately excluded from this file)
 3. **The plugin's configuration screen** (see above) — your personal
    defaults, used everywhere you don't set 1 or 2
 
-If none of the three are set anywhere, the built-in fallback is 80 / 95 / 98
-/ hard-abort off.
+If none of the three are set anywhere, the built-in fallback is
+80 / 95 / 97 / 98 / hard-abort off.
 
 | Variable | Default | Description |
 |---|---|---|
 | `CC_SESSION_SOFT` | 80 | Session SOFT threshold (%) — finishes the item, then stops |
 | `CC_SESSION_HARD` | 95 | Session HARD threshold (%) — can fire mid-item |
+| `CC_WEEKLY_SOFT` | 97 | Weekly SOFT threshold (%) — finishes the item, then stops |
 | `CC_WEEKLY_HARD` | 98 | Weekly HARD threshold (%) — can fire mid-item |
 | `CC_HARD_ABORT` | (unset/false) | Opt in to auto-revert (`git stash`) on a HARD threshold. Same as `cc-run --enable-hard-abort` |
 | `CC_USAGE_CACHE_TTL` | 30 | Usage cache lifetime (s) — also the hard-threshold detection lag |

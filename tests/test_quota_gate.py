@@ -149,6 +149,20 @@ def test_task_tool_state_incremental_tracking(tmp_path):
     assert state["in_progress"] is None
 
 
+def test_task_tool_state_taskcreate_missing_subject_falls_back(tmp_path):
+    """Regression test: a TaskCreate whose tool_response/tool_input both omit
+    'subject' must not store content=None — that value later feeds
+    _do_hard_stop's aborted_item[:60] slice (via a subsequent TaskUpdate to
+    in_progress) and a None there crashes the hook. Falls back to a
+    placeholder instead, mirroring the TaskUpdate branch's own fallback."""
+    proj = str(tmp_path)
+    state = qg._save_task_tool_state(
+        proj, "TaskCreate", {}, {"task": {"id": "1"}}, is_git=False,
+    )
+    assert state["todos"][0]["content"] is not None
+    assert state["todos"][0]["content"] == "task 1"
+
+
 def test_task_tool_state_tasklist_full_resync(tmp_path):
     proj = str(tmp_path)
     state = qg._save_task_tool_state(
@@ -215,6 +229,7 @@ def test_load_config_defaults(tmp_path):
     cfg = qg._load_config(str(tmp_path))
     assert cfg["session_soft"] == 80.0
     assert cfg["session_hard"] == 95.0
+    assert cfg["weekly_soft"] == 97.0
     assert cfg["weekly_hard"] == 98.0
     assert cfg["hard_abort_enabled"] is False
     assert cfg["language"] == "en"
@@ -234,11 +249,24 @@ def test_load_config_out_of_range_config_json_is_ignored(tmp_path):
     neuter the guard (session_hard: 99999) or grief it (session_soft: 0)."""
     os.makedirs(os.path.join(str(tmp_path), ".cc-quota"))
     with open(os.path.join(str(tmp_path), ".cc-quota", "config.json"), "w") as f:
-        json.dump({"session_hard": 99999, "session_soft": 0, "weekly_hard": -5}, f)
+        json.dump({"session_hard": 99999, "session_soft": 0, "weekly_soft": 0, "weekly_hard": -5}, f)
     cfg = qg._load_config(str(tmp_path))
     assert cfg["session_hard"] == 95.0
     assert cfg["session_soft"] == 80.0
+    assert cfg["weekly_soft"] == 97.0
     assert cfg["weekly_hard"] == 98.0
+
+
+def test_load_config_weekly_soft_reads_config_json_and_env(tmp_path, monkeypatch):
+    os.makedirs(os.path.join(str(tmp_path), ".cc-quota"))
+    with open(os.path.join(str(tmp_path), ".cc-quota", "config.json"), "w") as f:
+        json.dump({"weekly_soft": 90}, f)
+    cfg = qg._load_config(str(tmp_path))
+    assert cfg["weekly_soft"] == 90.0
+
+    monkeypatch.setenv("CC_WEEKLY_SOFT", "85")
+    cfg = qg._load_config(str(tmp_path))
+    assert cfg["weekly_soft"] == 85.0  # env var wins over config.json
 
 
 def test_load_config_hard_abort_enabled_never_read_from_config_json(tmp_path):
@@ -267,6 +295,39 @@ def test_load_config_malformed_env_var_does_not_crash(tmp_path, monkeypatch):
     monkeypatch.setenv("CC_SESSION_SOFT", "80%")
     cfg = qg._load_config(str(tmp_path))
     assert cfg["session_soft"] == 80.0  # falls back to default, doesn't raise
+
+
+# --------------------------------------------------------------------------- _do_soft_stop
+
+def test_do_soft_stop_session_window(tmp_path, monkeypatch):
+    proj = str(tmp_path)
+    captured = {}
+    monkeypatch.setattr(qg, "_block", lambda reason, user_msg: captured.update(reason=reason, user_msg=user_msg))
+
+    qg._do_soft_stop(proj, "session", 82.0, "2026-01-01T00:00:00Z", 80.0, lang="en")
+
+    assert "82%" in captured["reason"]
+    assert "80%" in captured["reason"]
+    assert "5-hour session" in captured["reason"]
+    marker = json.load(open(os.path.join(proj, ".cc-quota", "STOP.json")))
+    assert marker["mode"] == "soft" and marker["window"] == "session"
+
+
+def test_do_soft_stop_weekly_window_uses_weekly_label(tmp_path, monkeypatch):
+    """weekly_soft (default 97) reuses _do_soft_stop with which="week_all" —
+    same function as the session case, just a different window/threshold;
+    this checks the two don't get their labels/thresholds crossed."""
+    proj = str(tmp_path)
+    captured = {}
+    monkeypatch.setattr(qg, "_block", lambda reason, user_msg: captured.update(reason=reason, user_msg=user_msg))
+
+    qg._do_soft_stop(proj, "week_all", 97.5, "2026-01-01T00:00:00Z", 97.0, lang="en")
+
+    assert "97%" in captured["reason"]
+    assert "weekly" in captured["reason"]
+    assert "5-hour session" not in captured["reason"]
+    marker = json.load(open(os.path.join(proj, ".cc-quota", "STOP.json")))
+    assert marker["mode"] == "soft" and marker["window"] == "week_all"
 
 
 # --------------------------------------------------------------------------- localized user-facing messages
@@ -320,3 +381,21 @@ def test_do_hard_stop_does_not_revert_when_disabled(git_repo, monkeypatch):
 
     assert os.path.exists(os.path.join(proj, "work.txt")), "must not touch files when hard_abort_enabled is False"
     assert "REVERTED" not in captured["reason"]
+
+
+def test_do_hard_stop_does_not_crash_when_in_progress_content_is_none(git_repo, monkeypatch):
+    """Regression test for a real crash found by manual review + repro: an
+    in_progress item recorded with content=None (reachable via a TaskCreate
+    whose subject was missing, before the _save_task_tool_state fallback
+    above existed) used to raise TypeError on aborted_item[:60], crashing
+    the hook mid hard-abort instead of failing open."""
+    proj = str(git_repo)
+    state = {"in_progress": {"content": None, "checkpoint_commit": None}, "todos": []}
+
+    captured = {}
+    monkeypatch.setattr(qg, "_block", lambda reason, user_msg: captured.update(reason=reason, user_msg=user_msg))
+
+    qg._do_hard_stop(proj, "session", 96.0, "2026-01-01T00:00:00Z", 95.0, state, is_git=True, hard_abort_enabled=True, lang="en")
+
+    assert "REVERTED" in captured["reason"]
+    assert "None" not in captured["reason"]

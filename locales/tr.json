@@ -12,7 +12,7 @@
   "hard_abort_on_nogit": "⚠️  [cc-run] --enable-hard-abort verildi ama bu bir git deposu değil: hard-abort temiz durmaya düşecek.",
   "hard_abort_off": "→ [cc-run] hard-abort burada zorlanmadı — plugin/proje yapılandırman kullanılıyor (varsayılan: kapalı).",
   "archived_progress": "ℹ️  [cc-run] Önceki çalıştırmanın tamamlanmış progress.md dosyası arşivlendi (bu projede zaten tamamlanmış bir çalıştırma vardı).",
-  "starting": "▶️  [cc-run] Başlıyor (yumuşak=%{soft}, sert-session=%{hard_session}, sert-haftalık=%{hard_weekly}, model={model})",
+  "starting": "▶️  [cc-run] Başlıyor (yumuşak=%{soft}, sert-session=%{hard_session}, haftalık-yumuşak=%{weekly_soft}, sert-haftalık=%{hard_weekly}, model={model})",
   "resuming": "▶️  [cc-run] Kaldığı yerden devam ediyor (round {iter})",
   "still_working_item": "⏳ [cc-run] hâlâ çalışıyor ({waited}sn) — güncel madde: {item}",
   "still_working": "⏳ [cc-run] hâlâ çalışıyor ({waited}sn)",

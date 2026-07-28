@@ -4,7 +4,63 @@ All notable changes to cc-quota-guard are documented here. Versions match
 `.claude-plugin/plugin.json` and the `cc-quota-guard--vX.Y.Z` git tags.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — targeting 0.8.3
+## [Unreleased]
+
+## [0.9.0] — 2026-07-28
+
+### Added
+- **Weekly SOFT threshold** (`weekly_soft`, default 97%), symmetric with
+  the existing session SOFT threshold: at this usage %, Claude finishes
+  the current todo item then stops cleanly, checked at the same
+  TodoWrite/Task* item boundaries as session SOFT — session and weekly are
+  independent tiers, either can fire on its own. Wired through the full
+  precedence chain like every other threshold: `CC_WEEKLY_SOFT` env var,
+  `.cc-quota/config.json`'s `weekly_soft` key, the plugin's configure
+  screen, `cc-run --weekly-soft N`. Replaces an earlier idea of checking
+  the API's separate `seven_day_sonnet` usage field (fetched by
+  `usage.py` but never actually consulted) — decided a weekly SOFT
+  warning was the more useful fix, and simpler to reason about than a
+  third, per-model threshold.
+
+### Changed
+- `quota_gate.py`'s `main()` no longer computes `is_git` (a `git
+  rev-parse` subprocess spawn) unconditionally on every single tool call.
+  Most tool calls (a plain Edit/Bash/Read, not a planning call, nowhere
+  near a HARD threshold) never actually needed the answer — only the
+  TodoWrite/Task* state-tracking branch and the HARD-threshold checks do.
+  Now a memoized `is_git()` closure, computed lazily on first actual use
+  per hook invocation (still only ever spawns git once per call, same as
+  before, just skips the spawn entirely on the calls that never needed
+  it). No behavior change.
+
+### Fixed
+- `quota_gate.py`'s `_do_hard_stop` crashed with `TypeError` on
+  `aborted_item[:60]` when an in-progress item's `content` was `None`
+  (reachable via a `TaskCreate` call whose `tool_response`/`tool_input`
+  both omitted `subject`) — the one code path this project's fail-open
+  design can least afford to break, since it's the one that runs `git
+  stash` on the user's working tree. `_save_task_tool_state`'s `TaskCreate`
+  branch now falls back to a placeholder subject (matching the
+  pre-existing fallback in its `TaskUpdate` branch), and `_do_hard_stop`
+  itself now defends against a `None`/missing content defensively too.
+- `scripts/usage.py`'s `_read_token()` raised a bare `FileNotFoundError`
+  with no explanation when `~/.claude/.credentials.json` doesn't exist at
+  all — the likely case on a real macOS install if Claude Code stores the
+  OAuth token in the system Keychain instead (unverified; this project has
+  no Mac to test against). Now raises a `RuntimeError` that says so, so
+  `python3 scripts/usage.py` gives an actionable hint instead of a bare
+  traceback. Documented as an open, unverified gap in both READMEs.
+- `scripts/stream_render.py` rendered a failed round's `result` event
+  identically to a successful one — `claude` can exit 0 even when a round
+  didn't actually finish the task (e.g. `subtype: "error_max_turns"`), and
+  since `cc-run`'s retry logic only looks at the process exit code, it
+  can't tell the difference either; it just logs "ended on its own" and
+  quietly stops the whole unattended run. Now prints a visible warning
+  when the result event's `is_error` is true or `subtype` isn't
+  `"success"`. Covered by a new fake-`claude` scenario in
+  `tests/test_cc_run.sh`.
+
+## [0.8.3] — 2026-07-28
 
 ### Fixed
 - The 0.8.2 macOS fix was incomplete: the RULES prompt block was still

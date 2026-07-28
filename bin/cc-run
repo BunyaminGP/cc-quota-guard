@@ -66,6 +66,7 @@ err() {
 
 THRESHOLD=""
 SESSION_HARD=""
+WEEKLY_SOFT=""
 WEEKLY_HARD=""
 HARD_ABORT=""
 MODEL=""
@@ -83,6 +84,7 @@ cc-run — quota-aware Claude Code runner
 
   --threshold N        Session SOFT threshold (default 80 if not set anywhere else). Finishes the current item, then stops.
   --session-hard N     Session HARD threshold (default 95 if not set anywhere else). Can fire mid-item.
+  --weekly-soft N      Weekly SOFT threshold (default 97 if not set anywhere else). Finishes the current item, then stops.
   --weekly-hard N      Weekly HARD threshold (default 98 if not set anywhere else). Can fire mid-item.
   --enable-hard-abort   Force auto-revert (git stash) ON for this run when a HARD threshold fires.
                          If you don't pass this, hard-abort follows your plugin/project
@@ -105,6 +107,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --threshold)        THRESHOLD="$2"; shift 2;;
     --session-hard)     SESSION_HARD="$2"; shift 2;;
+    --weekly-soft)      WEEKLY_SOFT="$2"; shift 2;;
     --weekly-hard)      WEEKLY_HARD="$2"; shift 2;;
     --enable-hard-abort) HARD_ABORT="1"; shift;;
     --model)             MODEL="$2"; shift 2;;
@@ -130,6 +133,7 @@ command -v python3 >/dev/null  || { err no_python; exit 1; }
 # built-in defaults instead of being silently overridden by this script.
 [[ -n "$THRESHOLD" ]]    && export CC_SESSION_SOFT="$THRESHOLD"
 [[ -n "$SESSION_HARD" ]] && export CC_SESSION_HARD="$SESSION_HARD"
+[[ -n "$WEEKLY_SOFT" ]]  && export CC_WEEKLY_SOFT="$WEEKLY_SOFT"
 [[ -n "$WEEKLY_HARD" ]]  && export CC_WEEKLY_HARD="$WEEKLY_HARD"
 [[ "$HARD_ABORT" == "1" ]] && export CC_HARD_ABORT="1"
 [[ -n "$MODEL" ]] && CLAUDE_ARGS="$CLAUDE_ARGS --model $MODEL"
@@ -405,7 +409,7 @@ while true; do
   rm -f "$MARKER"
 
   if [[ $ITER -eq 1 ]]; then
-    msg starting "soft=${THRESHOLD:-default}" "hard_session=${SESSION_HARD:-default}" "hard_weekly=${WEEKLY_HARD:-default}" "model=${MODEL:-claude default}"
+    msg starting "soft=${THRESHOLD:-default}" "hard_session=${SESSION_HARD:-default}" "weekly_soft=${WEEKLY_SOFT:-default}" "hard_weekly=${WEEKLY_HARD:-default}" "model=${MODEL:-claude default}"
     PROMPT="$TASK"$'\n'"$RULES"
     if run_claude_with_heartbeat -p "$PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   else

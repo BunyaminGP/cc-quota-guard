@@ -3,7 +3,7 @@
   "name": "cc-quota-guard",
   "displayName": "cc-quota-guard",
   "description": "Quota-aware Claude Code: stop at a clean checkpoint before you hit your usage limit, and optionally auto-revert an in-progress todo item if you blow through a hard threshold.",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "author": {
     "name": "cc-quota-guard contributors"
   },
@@ -25,6 +25,14 @@
       "title": "Hard threshold — 5-hour session (%)",
       "description": "At this usage %, Claude can be stopped mid-item. With auto-revert off (default) this just forces a clean stop; with it on, the in-progress item is reverted with git stash.",
       "default": 95,
+      "min": 1,
+      "max": 100
+    },
+    "weekly_soft": {
+      "type": "number",
+      "title": "Soft threshold — weekly (%)",
+      "description": "At this usage %, Claude finishes the current todo item, then stops cleanly — same as the session soft threshold, but for the 7-day weekly quota.",
+      "default": 97,
       "min": 1,
       "max": 100
     },
