@@ -167,8 +167,16 @@ stream-json`'ı `scripts/stream_render.py`'dan geçirmekle oluyor — aynı
 Sadece "temiz dur" (wrapper'sız, etkileşimli oturum): hook'lar kurulu olduğu
 için normal `claude` oturumu da eşiklere gelince durur — ama otomatik devam
 etmez, reset sonrası `claude -c`'yi kendiniz çalıştırırsınız. Bu modda
-eşikleri ortam değişkeniyle verin: `CC_SESSION_SOFT=80 CC_SESSION_HARD=95
-CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98`, geri almayı açmak için `CC_HARD_ABORT=1`.
+eşikleri ortam değişkeniyle verin (aşağıdaki
+[Bir ortam değişkeni ayarlama](#bir-ortam-değişkeni-ayarlama) bölümüne bakın):
+
+```bash
+export CC_SESSION_SOFT=80 CC_SESSION_HARD=95 CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98 CC_HARD_ABORT=1
+```
+
+```powershell
+$env:CC_SESSION_SOFT = "80"; $env:CC_SESSION_HARD = "95"; $env:CC_WEEKLY_SOFT = "97"; $env:CC_WEEKLY_HARD = "98"; $env:CC_HARD_ABORT = "1"
+```
 
 ## Nasıl çalışır
 
@@ -222,8 +230,17 @@ yerine bir push bildirimi al.
    kimlik doğrulama yok** — konu adını bilen herkes ona yayınlanan her şeyi
    görebilir — o yüzden düz bir kelime değil, tahmin edilmesi zor bir isim
    seç. Örnek: `ccqg-adin-a1b2c3`, `test` değil.
-3. `CC_NOTIFY_URL=https://ntfy.sh/senin-konu-adin` ayarla — ortam
-   değişkeni olarak, ya da plugin'in yapılandırma ekranında (`notify_url`).
+3. `CC_NOTIFY_URL`'i o adrese ayarla — ortam değişkeni olarak (bkz.
+   [Bir ortam değişkeni ayarlama](#bir-ortam-değişkeni-ayarlama)), ya da
+   plugin'in yapılandırma ekranında (`notify_url`):
+
+   ```bash
+   export CC_NOTIFY_URL=https://ntfy.sh/senin-konu-adin
+   ```
+
+   ```powershell
+   $env:CC_NOTIFY_URL = "https://ntfy.sh/senin-konu-adin"
+   ```
 
 Bu kadar. Sıradaki eşik vuruşu, resume, tamamlanma ya da pes etme bir
 bildirim gönderir.
@@ -393,6 +410,27 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
   başarısız olduğunu gösterir — lütfen o çıktıyla bir issue açın.
 
 ## Ayarlar
+
+### Bir ortam değişkeni ayarlama
+
+Aşağıdaki her `CC_*` değişkeni aynı şekilde ayarlanır — sözdizimi shell'e
+göre değişir. `CC_SESSION_SOFT=80`'i herhangi biri için örnek olarak alalım:
+
+**bash / zsh (Linux, macOS, Git Bash):**
+```bash
+export CC_SESSION_SOFT=80          # bu shell oturumunun geri kalanında geçerli kalır
+CC_SESSION_SOFT=80 cc-run "..."    # ya da satır içi, sadece tek bir komut için
+```
+
+**PowerShell (Windows):**
+```powershell
+$env:CC_SESSION_SOFT = "80"
+cc-run "..."
+```
+Bu sadece o anki PowerShell penceresi için geçerli. Kalıcı yapmak için
+`$env:` satırını `$PROFILE`'ına ekle (yukarıdaki
+[cc-run'ı kendi terminalinizden kullanma](#cc-runı-kendi-terminalinizden-kullanma)
+bölümünde kullanılan dosyanın aynısı).
 
 Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 **her biri altındakini ezer**:

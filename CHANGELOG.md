@@ -6,6 +6,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-07-29
+
+### Fixed
+- README.md/README.tr.md's every `CC_*` environment variable example
+  (Settings, the "just stop cleanly" mode, Notifications setup) was
+  bash/zsh-only — found for real when manually testing the release in
+  PowerShell: pasting the documented `CC_NOTIFY_URL=...` syntax there
+  raises `CommandNotFoundException`, since PowerShell has no equivalent
+  inline-assignment form. Added a new "Setting an environment variable"
+  subsection (bash/zsh vs. `$env:` PowerShell side by side) and concrete
+  PowerShell examples at both call sites.
+
 ## [1.0.0] — 2026-07-29
 
 First stable release. No functional changes since 0.10.0 beyond what's

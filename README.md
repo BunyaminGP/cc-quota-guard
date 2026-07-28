@@ -162,9 +162,16 @@ underlying run, no extra cost, just parsed instead of shown as raw text.
 Just "stop cleanly" (no wrapper, interactive session): since the hooks are
 installed, a normal `claude` session also stops cleanly at the thresholds —
 but it won't auto-resume; you run `claude -c` yourself after the reset. Set
-thresholds for this mode with environment variables: `CC_SESSION_SOFT=80
-CC_SESSION_HARD=95 CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98`, and `CC_HARD_ABORT=1`
-to opt into auto-revert.
+thresholds for this mode with environment variables (see
+[Setting an environment variable](#setting-an-environment-variable) below):
+
+```bash
+export CC_SESSION_SOFT=80 CC_SESSION_HARD=95 CC_WEEKLY_SOFT=97 CC_WEEKLY_HARD=98 CC_HARD_ABORT=1
+```
+
+```powershell
+$env:CC_SESSION_SOFT = "80"; $env:CC_SESSION_HARD = "95"; $env:CC_WEEKLY_SOFT = "97"; $env:CC_WEEKLY_HARD = "98"; $env:CC_HARD_ABORT = "1"
+```
 
 ## How it works
 
@@ -217,8 +224,17 @@ after retries) instead of having to watch the terminal.
    authentication** — anyone who knows your topic name can read what's
    published to it — so pick something hard to guess, not a plain word.
    e.g. `ccqg-yourname-a1b2c3`, not `test`.
-3. Set `CC_NOTIFY_URL=https://ntfy.sh/your-topic-name` — as an environment
-   variable, or in the plugin's configure screen (`notify_url`).
+3. Set `CC_NOTIFY_URL` to that address — as an environment variable (see
+   [Setting an environment variable](#setting-an-environment-variable)), or
+   in the plugin's configure screen (`notify_url`):
+
+   ```bash
+   export CC_NOTIFY_URL=https://ntfy.sh/your-topic-name
+   ```
+
+   ```powershell
+   $env:CC_NOTIFY_URL = "https://ntfy.sh/your-topic-name"
+   ```
 
 That's it. The next threshold hit, resume, completion, or give-up pushes a
 notification.
@@ -389,6 +405,27 @@ Anthropic likely changed the schema — update the field names in
   open an issue with that output.
 
 ## Settings
+
+### Setting an environment variable
+
+Every `CC_*` variable below is set the same way — syntax differs by shell.
+Using `CC_SESSION_SOFT=80` as a stand-in for any of them:
+
+**bash / zsh (Linux, macOS, Git Bash):**
+```bash
+export CC_SESSION_SOFT=80          # persists for the rest of this shell session
+CC_SESSION_SOFT=80 cc-run "..."    # or inline, for one command only
+```
+
+**PowerShell (Windows):**
+```powershell
+$env:CC_SESSION_SOFT = "80"
+cc-run "..."
+```
+This lasts only for the current PowerShell window. To make it permanent,
+add the `$env:` line to your `$PROFILE` (the same file used in
+[Using cc-run from your own terminal](#using-cc-run-from-your-own-terminal)
+above).
 
 There are three places to set the thresholds, checked in this order —
 **each one overrides the ones below it**:
