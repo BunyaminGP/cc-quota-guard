@@ -94,6 +94,11 @@ try:
 except Exception:
     usage = None
 
+try:
+    import i18n  # noqa: E402
+except Exception:
+    i18n = None
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -176,6 +181,20 @@ def _parse_pct(value):
     return v
 
 
+def _parse_lang(value):
+    """
+    Returns a recognized language code, else None (ignore). "Recognized"
+    means i18n.available_languages() finds a locales/<code>.json file for
+    it — adding a new language is dropping that file in, nothing here
+    needs to change. Falls back to accepting only "en" if the i18n module
+    itself failed to import (matches its own FALLBACK_LANG).
+    """
+    v = str(value).strip().lower()
+    if i18n is None:
+        return v if v == "en" else None
+    return v if i18n.is_known_language(v) else None
+
+
 def _load_config(proj):
     """
     Precedence, lowest to highest (each step overrides the previous one):
@@ -186,12 +205,23 @@ def _load_config(proj):
       3. .cc-quota/config.json — per-project override
       4. CC_* environment variables — an explicit, one-off override (e.g.
          cc-run flags the user actually passed, or a manual `export`)
+
+    `language` follows the same four-tier precedence as the percentage
+    thresholds — it's purely cosmetic (which language the human-facing
+    systemMessage is written in), never security-relevant, so unlike
+    hard_abort_enabled it's fine to read from any tier including
+    config.json. Any code with a matching `locales/<code>.json` file is
+    valid (see i18n.py) — adding a language is dropping in that one file,
+    nothing here needs to change. Claude itself is always instructed in
+    English (the `reason` field) regardless of this setting — see
+    _label()/_soft_user_msg()/_hard_user_msg().
     """
     cfg = {
         "session_soft": 80.0,
         "session_hard": 95.0,
         "weekly_hard": 98.0,
         "hard_abort_enabled": False,
+        "language": "en",
     }
 
     plugin_option_map = {
@@ -207,6 +237,10 @@ def _load_config(proj):
                 cfg[key] = parsed
     if os.environ.get("CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED") not in (None, ""):
         cfg["hard_abort_enabled"] = _truthy(os.environ["CLAUDE_PLUGIN_OPTION_HARD_ABORT_ENABLED"])
+    if os.environ.get("CLAUDE_PLUGIN_OPTION_LANGUAGE") not in (None, ""):
+        parsed_lang = _parse_lang(os.environ["CLAUDE_PLUGIN_OPTION_LANGUAGE"])
+        if parsed_lang is not None:
+            cfg["language"] = parsed_lang
 
     # NOTE: hard_abort_enabled is deliberately NOT read from config.json.
     # That file lives inside the project and can arrive already committed
@@ -225,6 +259,10 @@ def _load_config(proj):
                 parsed = _parse_pct(fc[k])
                 if parsed is not None:
                     cfg[k] = parsed
+        if "language" in fc:
+            parsed_lang = _parse_lang(fc["language"])
+            if parsed_lang is not None:
+                cfg["language"] = parsed_lang
     except Exception:
         pass
 
@@ -240,6 +278,10 @@ def _load_config(proj):
                 cfg[key] = parsed
     if os.environ.get("CC_HARD_ABORT"):
         cfg["hard_abort_enabled"] = _truthy(os.environ["CC_HARD_ABORT"])
+    if os.environ.get("CC_LANG"):
+        parsed_lang = _parse_lang(os.environ["CC_LANG"])
+        if parsed_lang is not None:
+            cfg["language"] = parsed_lang
     return cfg
 
 
@@ -259,13 +301,34 @@ def _block(reason, user_msg):
 
 
 def _git(proj, *args):
-    try:
-        r = subprocess.run(
-            ["git", "-C", proj, *args], capture_output=True, text=True, timeout=15
-        )
-        return r.returncode, r.stdout.strip(), r.stderr.strip()
-    except Exception as e:
-        return 1, "", str(e)
+    """
+    Runs git, returning (code, stdout, stderr) — (1, "", <error>) on any
+    failure to invoke it at all (fail-open: callers treat that the same as
+    "git said no").
+
+    Retries a couple of times first on OSError specifically: on some
+    Windows/Python combinations, spawning many subprocesses in a short
+    window can intermittently raise "OSError: [WinError 6] The handle is
+    invalid" from stdio pipe setup — unrelated to git or the repo, and
+    usually gone on the next attempt. Retrying here matters because a
+    security-relevant caller (_is_git_tracked, used by
+    _sanitize_state_for_revert) would otherwise read a transient OSError
+    as "not tracked" and trust a claim it should have distrusted, purely
+    from bad luck rather than the file genuinely being untracked.
+    """
+    last_err = "git invocation failed"
+    for attempt in range(3):
+        try:
+            r = subprocess.run(
+                ["git", "-C", proj, *args], capture_output=True, text=True, timeout=15
+            )
+            return r.returncode, r.stdout.strip(), r.stderr.strip()
+        except OSError as e:
+            last_err = str(e)
+            time.sleep(0.05 * (attempt + 1))
+        except Exception as e:
+            return 1, "", str(e)
+    return 1, "", last_err
 
 
 def _is_git_repo(proj):
@@ -455,6 +518,40 @@ def _marker_still_valid(proj):
         return False
 
 
+# --------------------------------------------------------------------------- user-facing messages
+#
+# Only the systemMessage shown to the human is ever localized, via the
+# shared i18n.py catalog (see its docstring for how to add a language).
+# `reason` — the text that instructs Claude what to do — is always
+# English, regardless of `language`: it's a model instruction, not
+# something a person reads directly, and this codebase's Claude-facing
+# instructions are only tested in English throughout.
+#
+# Each helper falls back to a hardcoded English string if the i18n module
+# itself failed to import (fail-open: a broken/missing locales/ directory
+# must never crash the hook or leave the human with no status line at all).
+
+def _label(which, lang):
+    key = "label_session" if which == "session" else "label_week"
+    if i18n is None:
+        return "5-hour session" if which == "session" else "weekly"
+    return i18n.msg(lang, key)
+
+
+def _soft_user_msg(lang, label, pct, resets_at):
+    if i18n is None:
+        return f"⛔ Quota threshold reached ({label} {pct:.0f}%) — Claude is wrapping up cleanly. Reset: {resets_at}"
+    return i18n.msg(lang, "soft_stop", label=label, pct=f"{pct:.0f}", resets_at=resets_at)
+
+
+def _hard_user_msg(lang, label, pct, resets_at, did_revert):
+    if i18n is None:
+        state = "item reverted" if did_revert else "clean stop"
+        return f"⛔ HARD quota threshold ({label} {pct:.0f}%) — {state}. Reset: {resets_at}"
+    key = "hard_stop_reverted" if did_revert else "hard_stop_clean"
+    return i18n.msg(lang, key, label=label, pct=f"{pct:.0f}", resets_at=resets_at)
+
+
 # --------------------------------------------------------------------------- hard threshold
 
 def _sanitize_state_for_revert(proj, state, is_git):
@@ -482,7 +579,7 @@ def _sanitize_state_for_revert(proj, state, is_git):
     return state
 
 
-def _do_hard_stop(proj, which, pct, resets_at, thr, state, is_git, hard_abort_enabled):
+def _do_hard_stop(proj, which, pct, resets_at, thr, state, is_git, hard_abort_enabled, lang="en"):
     in_progress = (state or {}).get("in_progress")
     aborted_item = in_progress.get("content") if in_progress else None
     stash_created = False
@@ -546,7 +643,7 @@ def _do_hard_stop(proj, which, pct, resets_at, thr, state, is_git, hard_abort_en
         "hard_abort_enabled": hard_abort_enabled,
     })
 
-    label = "5-hour session" if which == "session" else "weekly"
+    label = _label(which, "en")  # `reason` (Claude-facing) always stays English
     if did_revert:
         reason = (
             f"[HARD QUOTA THRESHOLD] {label} usage reached {pct:.0f}% (threshold {thr:.0f}%). "
@@ -568,16 +665,13 @@ def _do_hard_stop(proj, which, pct, resets_at, thr, state, is_git, hard_abort_en
             "give a short note, and END THE TURN. Don't start anything new.\n"
             f"Quota reset time: {resets_at}."
         )
-    user_msg = (
-        f"⛔ HARD quota threshold ({label} {pct:.0f}%) — "
-        f"{'item reverted' if did_revert else 'clean stop'}. Reset: {resets_at}"
-    )
+    user_msg = _hard_user_msg(lang, _label(which, lang), pct, resets_at, did_revert)
     _block(reason, user_msg)
 
 
 # --------------------------------------------------------------------------- soft threshold
 
-def _do_soft_stop(proj, which, pct, resets_at, thr):
+def _do_soft_stop(proj, which, pct, resets_at, thr, lang="en"):
     _write_marker(proj, {
         "mode": "soft",
         "window": which,
@@ -589,7 +683,7 @@ def _do_soft_stop(proj, which, pct, resets_at, thr):
         "stash_created": False,
     })
 
-    label = "5-hour session" if which == "session" else "weekly"
+    label = _label(which, "en")  # `reason` (Claude-facing) always stays English
     reason = (
         f"[QUOTA THRESHOLD] {label} usage reached {pct:.0f}% (threshold {thr:.0f}%). "
         "Do NOT start a new todo item. Instead, wrap up cleanly IN THIS ORDER:\n"
@@ -600,7 +694,7 @@ def _do_soft_stop(proj, which, pct, resets_at, thr):
         "4) Give a short summary and END THE TURN — don't call any more tools.\n"
         f"Quota reset time: {resets_at}. After the reset, work resumes by reading `.cc-quota/progress.md`."
     )
-    user_msg = f"⛔ Quota threshold reached ({label} {pct:.0f}%) — Claude is wrapping up cleanly. Reset: {resets_at}"
+    user_msg = _soft_user_msg(lang, _label(which, lang), pct, resets_at)
     _block(reason, user_msg)
 
 
@@ -667,17 +761,19 @@ def main():
     # by git (see _sanitize_state_for_revert()).
     if s_pct is not None and s_pct >= cfg["session_hard"]:
         _do_hard_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_hard"],
-                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"])
+                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"],
+                      cfg["language"])
     if w_pct is not None and w_pct >= cfg["weekly_hard"]:
         _do_hard_stop(proj, "week_all", w_pct, week.get("resets_at"), cfg["weekly_hard"],
-                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"])
+                      _sanitize_state_for_revert(proj, state, is_git), is_git, cfg["hard_abort_enabled"],
+                      cfg["language"])
 
     # SOFT threshold — only checked at item boundaries: a TodoWrite call, or
     # (on Claude Code versions that plan this way instead) a
     # TaskCreate/TaskUpdate/TaskList call.
     if tool_name in ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList") \
             and s_pct is not None and s_pct >= cfg["session_soft"]:
-        _do_soft_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_soft"])
+        _do_soft_stop(proj, "session", s_pct, session.get("resets_at"), cfg["session_soft"], cfg["language"])
 
     _allow()
 

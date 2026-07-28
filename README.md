@@ -319,7 +319,9 @@ There are three places to set the thresholds, checked in this order —
 1. **`CC_*` environment variables** — an explicit, one-off override (what
    `cc-run` flags set when you actually pass them, or a manual `export`)
 2. **`.cc-quota/config.json`** (per-project) — keys `session_soft`,
-   `session_hard`, `weekly_hard`, `hard_abort_enabled`
+   `session_hard`, `weekly_hard`, `language` (**not** `hard_abort_enabled` —
+   see [Safety](#safety--read-this-before-enabling-hard-abort) for why that
+   one is deliberately excluded from this file)
 3. **The plugin's configuration screen** (see above) — your personal
    defaults, used everywhere you don't set 1 or 2
 
@@ -338,6 +340,53 @@ If none of the three are set anywhere, the built-in fallback is 80 / 95 / 98
 | `CC_ROUND_TIMEOUT` | 3600 | Max seconds a single round (initial or resume) can run with zero progress before it's treated as stuck (e.g. the network dropped) and ended so it can be retried. `0` disables the cap. |
 | `CC_MAX_RETRIES` | 5 | How many times in a row a round can end abnormally (non-zero exit, including a `CC_ROUND_TIMEOUT` cutoff) before `cc-run` gives up instead of retrying |
 | `CC_RETRY_BACKOFF` | 30 | Base seconds between retries; grows linearly with each consecutive failure (attempt N waits `N × CC_RETRY_BACKOFF`s) |
+| `CC_LANG` | `en` | `en` or `tr` — language for `cc-run`'s own terminal messages and the hook's user-facing status line. See [Language](#language--dil) below. |
+
+## Language / Dil
+
+Two things can be localized, independently of each other:
+
+- **`cc-run`'s own terminal output** (start/resume/sleep/retry/done lines).
+  Precedence: `CC_LANG` env var > `.cc-quota/config.json`'s `"language"` key
+  > `en`. `cc-run` is invoked directly by you rather than by Claude Code's
+  hook system, so it never sees the plugin's configure-screen setting
+  (that env var is only populated for hook invocations) — set `CC_LANG`
+  yourself, or add `"language": "tr"` to `.cc-quota/config.json`.
+- **The hook's `systemMessage`** (the human-readable line Claude Code shows
+  you when a threshold stops it). Precedence: `CC_LANG` > `.cc-quota/config.json`
+  > the plugin's configure screen (`--config language=tr`) > `en`.
+
+**Claude itself is always instructed in English, regardless of this
+setting.** Only the text a *human* reads (`cc-run`'s terminal lines, the
+hook's `systemMessage`) is ever translated — the `reason` field that tells
+Claude what to do next is a model instruction, not something you read
+directly, and this project's Claude-facing instructions are only tested in
+English.
+
+### Adding a language
+
+Every user-facing string lives in one place: `locales/<code>.json` (one
+file per language, e.g. `locales/en.json`, `locales/tr.json`). Both
+`cc-run` and the hook read the same files through `scripts/i18n.py`, so
+there's exactly one catalog to translate, not two.
+
+**To add a language, copy `locales/en.json` to `locales/<code>.json` and
+translate the values — that's it, no code changes anywhere.** The language
+becomes selectable immediately (`CC_LANG=<code>`, `.cc-quota/config.json`'s
+`"language"` key, or the plugin's configure screen). A few notes:
+
+- Keep every `{placeholder}` exactly as-is; only translate the surrounding
+  text. Placeholders are Python `str.format()` fields, so word order is
+  completely free — put `{item}` wherever the sentence needs it.
+- A partial translation is fine. Any key your file doesn't have (or a code
+  nobody's added a file for at all) falls back to English automatically —
+  see `i18n.msg()`'s fallback chain. Nothing crashes over a missing key.
+- `bin/cc-run` has four bootstrap error messages (no task given, task file
+  not found, `claude`/`python3` missing) that exist *before* python3's
+  presence is confirmed, so they can't shell out to `i18n.py` — see `err()`
+  near the top of that file. They're hardcoded English/Turkish only; adding
+  a `locales/` file doesn't extend those four specifically (an accepted,
+  narrow gap given how rare those invocation errors are).
 
 ## Uninstall
 
@@ -358,7 +407,9 @@ rm -rf ~/.claude/cc-quota-guard ~/.claude/.cc-quota-cache.json ~/.local/bin/cc-r
 
 Issues and PRs welcome. If you change the quota-detection or revert logic,
 keep the "fail open, opt in to anything destructive, document the
-limitation" style — that's the whole point of this tool.
+limitation" style — that's the whole point of this tool. Run `pytest
+tests/` and `bash tests/test_cc_run.sh` before opening a PR (see
+[CHANGELOG.md](CHANGELOG.md) for what's already shipped).
 
 ## License
 

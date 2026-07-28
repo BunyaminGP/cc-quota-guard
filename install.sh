@@ -17,12 +17,15 @@ SETTINGS="$HOME/.claude/settings.json"
 command -v python3 >/dev/null || { echo "python3 is required." >&2; exit 1; }
 
 echo "→ Copying files to: $DEST"
-mkdir -p "$DEST/scripts" "$DEST/bin" "$DEST/templates"
-cp "$SRC/scripts/quota_gate.py" "$DEST/scripts/"
-cp "$SRC/scripts/usage.py"      "$DEST/scripts/"
-cp "$SRC/bin/cc-run"            "$DEST/bin/"
-cp "$SRC/templates/progress.md" "$DEST/templates/" 2>/dev/null || true
-chmod +x "$DEST/bin/cc-run" "$DEST/scripts/quota_gate.py" "$DEST/scripts/usage.py"
+mkdir -p "$DEST/scripts" "$DEST/bin" "$DEST/templates" "$DEST/locales"
+cp "$SRC/scripts/quota_gate.py"    "$DEST/scripts/"
+cp "$SRC/scripts/usage.py"         "$DEST/scripts/"
+cp "$SRC/scripts/i18n.py"          "$DEST/scripts/"
+cp "$SRC/scripts/stream_render.py" "$DEST/scripts/" 2>/dev/null || true
+cp "$SRC/locales/"*.json           "$DEST/locales/"
+cp "$SRC/bin/cc-run"               "$DEST/bin/"
+cp "$SRC/templates/progress.md"    "$DEST/templates/" 2>/dev/null || true
+chmod +x "$DEST/bin/cc-run" "$DEST/scripts/quota_gate.py" "$DEST/scripts/usage.py" "$DEST/scripts/i18n.py"
 
 HOOK_SCRIPT="$DEST/scripts/quota_gate.py"
 

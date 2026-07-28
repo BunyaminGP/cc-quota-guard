@@ -3,7 +3,7 @@
   "name": "cc-quota-guard",
   "displayName": "cc-quota-guard",
   "description": "Quota-aware Claude Code: stop at a clean checkpoint before you hit your usage limit, and optionally auto-revert an in-progress todo item if you blow through a hard threshold.",
-  "version": "0.6.0",
+  "version": "0.8.1",
   "author": {
     "name": "cc-quota-guard contributors"
   },
@@ -41,6 +41,12 @@
       "title": "Enable auto-revert (git stash) on the hard threshold",
       "description": "Off by default. When on, a hard threshold hit mid-item automatically reverts that item's changes with git stash and redoes it after the quota resets. Read the README's Safety section before enabling this.",
       "default": false
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Dil",
+      "description": "Language for the hook's user-facing status line (systemMessage) when a threshold stops Claude. Claude itself is always instructed in English regardless of this setting — this only affects what you, the human, see. Any code with a matching locales/<code>.json file works (currently: en, tr); an unrecognized code falls back to English.",
+      "default": "en"
     }
   }
 }

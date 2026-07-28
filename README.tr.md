@@ -326,7 +326,9 @@ Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 1. **`CC_*` ortam değişkenleri** — açık, tek seferlik override (`cc-run`
    bayraklarını elle verdiğinizde ya da manuel `export` ile)
 2. **`.cc-quota/config.json`** (proje bazlı) — `session_soft`,
-   `session_hard`, `weekly_hard`, `hard_abort_enabled` anahtarları
+   `session_hard`, `weekly_hard`, `language` anahtarları (`hard_abort_enabled`
+   **hariç** — bu anahtarın bu dosyadan bilerek dışlanma sebebi için
+   [Güvenlik](#güvenlik--hard-abort-açmadan-önce-okuyun) bölümüne bakın)
 3. **Plugin'in yapılandırma ekranı** (yukarıda) — 1 ya da 2'yi vermediğiniz
    her yerde geçerli olan kişisel varsayılanınız
 
@@ -345,6 +347,58 @@ Eşikleri ayarlayabileceğiniz üç yer var, şu sırayla kontrol edilir —
 | `CC_ROUND_TIMEOUT` | 3600 | Tek bir round'un (ilk ya da devam) hiç ilerleme kaydetmeden çalışabileceği azami süre (sn) — aşılırsa asılı kaldığı varsayılıp (ör. ağ kesildi) yeniden denenir. `0` sınırı kapatır. |
 | `CC_MAX_RETRIES` | 5 | Bir round'un art arda kaç kez anormal biterse (sıfır olmayan çıkış, `CC_ROUND_TIMEOUT` dahil) `cc-run`'ın yeniden denemek yerine pes edeceği |
 | `CC_RETRY_BACKOFF` | 30 | Denemeler arası temel saniye; her art arda başarısızlıkta doğrusal artar (N. deneme `N × CC_RETRY_BACKOFF` sn bekler) |
+| `CC_LANG` | `en` | `en` ya da `tr` — `cc-run`'ın kendi terminal mesajlarının ve hook'un kullanıcıya gösterdiği durum satırının dili. Aşağıdaki [Dil / Language](#dil--language) bölümüne bakın. |
+
+## Dil / Language
+
+Birbirinden bağımsız iki şey yerelleştirilebilir:
+
+- **`cc-run`'ın kendi terminal çıktısı** (başlıyor/devam ediyor/uyuyor/yeniden
+  deniyor/bitti satırları). Öncelik: `CC_LANG` ortam değişkeni >
+  `.cc-quota/config.json`'ın `"language"` anahtarı > `en`. `cc-run` Claude
+  Code'un hook sistemi tarafından değil senin tarafından doğrudan çağrıldığı
+  için plugin'in yapılandırma ekranındaki ayarı hiç görmez (o ortam değişkeni
+  sadece hook çağrılarında set edilir) — `CC_LANG`'ı kendin ayarla, ya da
+  `.cc-quota/config.json`'a `"language": "tr"` ekle.
+- **Hook'un `systemMessage`'ı** (bir eşik Claude'u durdurduğunda Claude
+  Code'un sana gösterdiği okunabilir satır). Öncelik: `CC_LANG` >
+  `.cc-quota/config.json` > plugin'in yapılandırma ekranı
+  (`--config language=tr`) > `en`.
+
+**Claude'un kendisi bu ayardan bağımsız olarak her zaman İngilizce talimat
+alır.** Sadece bir *insanın* okuduğu metin (`cc-run`'ın terminal satırları,
+hook'un `systemMessage`'ı) çevriliyor — Claude'a ne yapacağını söyleyen
+`reason` alanı bir model talimatı, senin doğrudan okuduğun bir şey değil, ve
+bu projenin Claude'a yönelik talimatları sadece İngilizce test edilmiş
+durumda.
+
+### Yeni bir dil eklemek
+
+Kullanıcıya yönelik her metin tek bir yerde yaşıyor: `locales/<kod>.json`
+(her dil için bir dosya, ör. `locales/en.json`, `locales/tr.json`). Hem
+`cc-run` hem de hook, `scripts/i18n.py` üzerinden aynı dosyaları okuyor —
+yani çevrilecek tek bir katalog var, iki değil.
+
+**Yeni bir dil eklemek için `locales/en.json`'ı `locales/<kod>.json` olarak
+kopyalayıp değerleri çevir — hepsi bu, hiçbir yerde kod değişikliği
+gerekmez.** Dil hemen seçilebilir hale gelir (`CC_LANG=<kod>`,
+`.cc-quota/config.json`'ın `"language"` anahtarı, ya da plugin'in
+yapılandırma ekranı). Birkaç not:
+
+- Her `{yer_tutucuyu}` aynen koru; sadece etrafındaki metni çevir. Yer
+  tutucular Python `str.format()` alanlarıdır, yani kelime sırası tamamen
+  serbest — `{item}`'ı cümlenin gerektirdiği yere koyabilirsin.
+- Kısmi bir çeviri sorun değil. Dosyanda olmayan herhangi bir anahtar (ya da
+  kimsenin hiç dosya eklemediği bir kod) otomatik olarak İngilizce'ye düşer
+  — bkz. `i18n.msg()`'in geri düşüş zinciri. Eksik bir anahtar yüzünden
+  hiçbir şey çökmez.
+- `bin/cc-run`'da python3'ün varlığı doğrulanmadan *önce* var olan dört
+  önyükleme (bootstrap) hata mesajı var (görev verilmedi, görev dosyası
+  bulunamadı, `claude`/`python3` bulunamadı) — bunlar `i18n.py`'ye
+  ulaşamıyor, bkz. dosyanın başındaki `err()`. Bunlar sadece sabit
+  İngilizce/Türkçe; bir `locales/` dosyası eklemek bu dört mesajı
+  genişletmiyor (bu istisnai durumların ne kadar nadir olduğu düşünülürse
+  kabul edilebilir, dar bir sınır).
 
 ## Kaldırma
 
@@ -365,7 +419,9 @@ rm -rf ~/.claude/cc-quota-guard ~/.claude/.cc-quota-cache.json ~/.local/bin/cc-r
 
 Issue ve PR'lar açık. Kota tespiti ya da geri alma mantığını değiştirirken
 "fail-open, yıkıcı olan her şeye opt-in, sınırlamayı belgele" tarzını koruyun
-— aracın bütün amacı bu.
+— aracın bütün amacı bu. PR açmadan önce `pytest tests/` ve
+`bash tests/test_cc_run.sh` çalıştırın (neyin zaten yayınlandığı için
+[CHANGELOG.md](CHANGELOG.md)'ye bakın).
 
 ## Lisans
 

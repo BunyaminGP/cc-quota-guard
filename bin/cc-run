@@ -34,6 +34,36 @@
 # Requires: bash, python3, claude (CLI). The hard-abort revert also requires git.
 set -euo pipefail
 
+# Minimal bilingual error helper for the handful of messages that can occur
+# before python3's availability is confirmed a few lines below — and so
+# before msg() (later in this script, which shells out to scripts/i18n.py
+# and therefore needs python3) can be used at all. Deliberately NOT part of
+# the locales/*.json system: it's hardcoded en/tr only, checked via the
+# CC_LANG env var alone (no config.json — that needs python3 too). Adding a
+# language to locales/ does not extend these four messages; that's an
+# accepted, narrow limitation given how rare these invocation errors are.
+err() {
+  local key="$1"; shift
+  case "${CC_LANG:-}" in
+    [Tt][Rr])
+      case "$key" in
+        no_task)   echo "Hata: görev verilmedi." >&2 ;;
+        task_file) echo "Hata: görev dosyası bulunamadı: $1" >&2 ;;
+        no_claude) echo "Hata: 'claude' CLI bulunamadı." >&2 ;;
+        no_python) echo "Hata: python3 gerekli." >&2 ;;
+      esac
+      ;;
+    *)
+      case "$key" in
+        no_task)   echo "Error: no task given." >&2 ;;
+        task_file) echo "Error: task file not found: $1" >&2 ;;
+        no_claude) echo "Error: 'claude' CLI not found." >&2 ;;
+        no_python) echo "Error: python3 is required." >&2 ;;
+      esac
+      ;;
+  esac
+}
+
 THRESHOLD=""
 SESSION_HARD=""
 WEEKLY_HARD=""
@@ -84,16 +114,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TASK" ]]; then
-  echo "Error: no task given." >&2; usage; exit 1
+  err no_task; usage; exit 1
 fi
 if [[ "$TASK" == @* ]]; then
   f="${TASK:1}"
-  [[ -f "$f" ]] || { echo "Error: task file not found: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { err task_file "$f"; exit 1; }
   TASK="$(cat "$f")"
 fi
 
-command -v claude >/dev/null   || { echo "Error: 'claude' CLI not found." >&2; exit 1; }
-command -v python3 >/dev/null  || { echo "Error: python3 is required." >&2; exit 1; }
+command -v claude >/dev/null   || { err no_claude; exit 1; }
+command -v python3 >/dev/null  || { err no_python; exit 1; }
 
 # Only export what was actually passed on the command line — an unset var
 # here lets quota_gate.py fall through to project config / plugin config /
@@ -108,16 +138,6 @@ if git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   IS_GIT=1
 else
   IS_GIT=0
-fi
-
-if [[ "$HARD_ABORT" == "1" ]]; then
-  if [[ "$IS_GIT" == "1" ]]; then
-    echo "→ [cc-run] --enable-hard-abort passed: hard-abort is ON for this run (git stash on a HARD threshold)."
-  else
-    echo "⚠️  [cc-run] --enable-hard-abort passed but this isn't a git repo: hard-abort will fall back to a clean stop." >&2
-  fi
-else
-  echo "→ [cc-run] hard-abort not forced here — using your plugin/project configuration (built-in default: off)."
 fi
 
 # Windows/Git-Bash note: bash sees paths like /c/proje/hns, but python3 here
@@ -135,6 +155,64 @@ to_py_path() {
 }
 PROJ_PY="$(to_py_path "$PROJ")"
 
+# Resolved once, relative to this script (works whether this is the
+# plugin's cached copy or an install.sh copy — both keep bin/, scripts/,
+# and locales/ as siblings). Reused below for the stream renderer too.
+CC_RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCALES_DIR="$CC_RUN_DIR/../locales"
+I18N_PY="$CC_RUN_DIR/../scripts/i18n.py"
+
+# Language for cc-run's OWN terminal messages — never affects what Claude
+# itself is instructed (the RULES/PROMPT text below always stays English).
+# Precedence: CC_LANG env var > .cc-quota/config.json's "language" key >
+# "en". This mirrors quota_gate.py's own config precedence, but with only
+# two tiers: cc-run is invoked directly by the user rather than by Claude
+# Code's hook system, so it never sees the plugin's own userConfig screen
+# (CLAUDE_PLUGIN_OPTION_* env vars are only set for hook invocations) —
+# that tier only reaches the hook's own systemMessage, not this script's
+# output. Any code with a matching locales/<code>.json file is accepted —
+# adding a language is dropping in that one file, nothing here changes.
+# `tr '[:upper:]' '[:lower:]'` rather than bash 4's `${var,,}` for
+# portability to older bash (e.g. macOS's stock /bin/bash is 3.2).
+CCLANG="en"
+CC_LANG_LOWER="$(printf '%s' "${CC_LANG:-}" | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$CC_LANG_LOWER" && -f "$LOCALES_DIR/$CC_LANG_LOWER.json" ]]; then
+  CCLANG="$CC_LANG_LOWER"
+elif [[ -z "$CC_LANG_LOWER" ]]; then
+  CFG_LANG=$(python3 -c "
+import json, os
+try:
+    with open(r'$(to_py_path "$PROJ/.cc-quota/config.json")') as f:
+        d = json.load(f)
+    v = str(d.get('language', '')).strip().lower()
+    print(v if v and os.path.isfile(os.path.join(r'$(to_py_path "$LOCALES_DIR")', v + '.json')) else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+  [[ -n "$CFG_LANG" ]] && CCLANG="$CFG_LANG"
+fi
+
+# Localized status line for THIS SCRIPT's own terminal output only. $1 is
+# a message key, remaining args are name=value pairs — see i18n.py, which
+# does the actual lookup/formatting so cc-run and quota_gate.py share one
+# message catalog (locales/*.json) instead of keeping two copies in sync.
+# Fails open to printing the bare key if i18n.py is missing/broken (e.g. a
+# corrupted install) rather than crashing or going silent.
+msg() {
+  local key="$1"; shift
+  python3 "$(to_py_path "$I18N_PY")" "$CCLANG" "$key" "$@" 2>/dev/null || printf '[cc-run] %s\n' "$key"
+}
+
+if [[ "$HARD_ABORT" == "1" ]]; then
+  if [[ "$IS_GIT" == "1" ]]; then
+    msg hard_abort_on_git
+  else
+    msg hard_abort_on_nogit >&2
+  fi
+else
+  msg hard_abort_off
+fi
+
 MARKER="$PROJ/.cc-quota/STOP.json"
 MARKER_PY="$PROJ_PY/.cc-quota/STOP.json"
 PROGRESS="$PROJ/.cc-quota/progress.md"
@@ -148,7 +226,7 @@ mkdir -p "$PROJ/.cc-quota"
 # state; the old file isn't lost, just renamed out of the way.
 if [[ -f "$PROGRESS" ]] && grep -q '^CC_QUOTA_DONE' "$PROGRESS"; then
   mv "$PROGRESS" "${PROGRESS}.done-$(date +%Y%m%d%H%M%S)"
-  echo "ℹ️  [cc-run] Previous run's finished progress.md archived (this project already had a completed run here)."
+  msg archived_progress
 fi
 
 RULES=$(cat <<EOF
@@ -191,11 +269,9 @@ except Exception:
 " "$PROJ_PY" 2>/dev/null
 }
 
-# Path to the stream renderer, resolved relative to this script (works
-# whether this is the plugin's cached copy or an install.sh copy — both
-# keep bin/ and scripts/ as siblings). Empty if it's missing for some
-# reason, in which case we fall back to plain text output.
-CC_RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Path to the stream renderer (CC_RUN_DIR resolved earlier, alongside
+# LOCALES_DIR/I18N_PY). Empty if it's missing for some reason, in which
+# case we fall back to plain text output.
 STREAM_RENDERER="$CC_RUN_DIR/../scripts/stream_render.py"
 [[ -f "$STREAM_RENDERER" ]] || STREAM_RENDERER=""
 
@@ -233,7 +309,7 @@ run_claude_with_heartbeat() {
       break
     fi
     if [[ "$max_wait" -gt 0 && $waited -ge $max_wait ]]; then
-      echo "⚠️  [cc-run] No progress for ${waited}s (limit \$CC_ROUND_TIMEOUT=${max_wait}s) — assuming this round is stuck (e.g. the network dropped mid-request) and ending it so it can be retried." >&2
+      msg round_timeout "waited=$waited" "max_wait=$max_wait" >&2
       # Kills the tracked process (the renderer, or claude itself when the
       # renderer isn't used); on the renderer path this closes its end of
       # the pipe, which normally makes claude's own write fail shortly
@@ -246,9 +322,9 @@ run_claude_with_heartbeat() {
     local item
     item="$(current_item)"
     if [[ -n "$item" ]]; then
-      echo "⏳ [cc-run] still working (${waited}s) — current item: $item"
+      msg still_working_item "waited=$waited" "item=$item"
     else
-      echo "⏳ [cc-run] still working (${waited}s)"
+      msg still_working "waited=$waited"
     fi
   done
   wait "$pid"
@@ -299,17 +375,17 @@ while true; do
   rm -f "$MARKER"
 
   if [[ $ITER -eq 1 ]]; then
-    echo "▶️  [cc-run] Starting (soft=${THRESHOLD:-default}%, hard-session=${SESSION_HARD:-default}%, hard-weekly=${WEEKLY_HARD:-default}%, model=${MODEL:-claude default})"
+    msg starting "soft=${THRESHOLD:-default}" "hard_session=${SESSION_HARD:-default}" "hard_weekly=${WEEKLY_HARD:-default}" "model=${MODEL:-claude default}"
     PROMPT="$TASK"$'\n'"$RULES"
     if run_claude_with_heartbeat -p "$PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   else
-    echo "▶️  [cc-run] Resuming where it left off (round $ITER)"
+    msg resuming "iter=$ITER"
     RESUME_PROMPT="Read .cc-quota/progress.md. If an item was reverted due to quota (back to pending), redo it FROM SCRATCH; then continue the remaining tasks from where you left off.${RULES}"
     if run_claude_with_heartbeat -c -p "$RESUME_PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   fi
 
   if is_done; then
-    echo "✅ [cc-run] Task complete (CC_QUOTA_DONE)."
+    msg task_complete
     break
   fi
 
@@ -325,9 +401,9 @@ while true; do
     SECS=$((SECS + BUFFER_SECONDS))
     WAKE=$(python3 -c 'import sys,datetime;print((datetime.datetime.now()+datetime.timedelta(seconds=int(sys.argv[1]))).strftime("%Y-%m-%d %H:%M:%S"))' "$SECS")
     if [[ "$MODE" == "hard" && -n "$ABORTED" ]]; then
-      echo "⏸️  [cc-run] HARD quota threshold ($WINDOW). '${ABORTED}' was reverted. Reset: ${RESETS:-unknown}. Sleeping ${SECS}s → resuming ~$WAKE."
+      msg hard_reverted_sleep "window=$WINDOW" "aborted=$ABORTED" "resets=${RESETS:-unknown}" "secs=$SECS" "wake=$WAKE"
     else
-      echo "⏸️  [cc-run] Quota threshold ($WINDOW, mode=$MODE). Reset: ${RESETS:-unknown}. Sleeping ${SECS}s → resuming ~$WAKE."
+      msg threshold_sleep "window=$WINDOW" "mode=$MODE" "resets=${RESETS:-unknown}" "secs=$SECS" "wake=$WAKE"
     fi
     sleep "$SECS"
     continue
@@ -340,18 +416,18 @@ while true; do
   if [[ "$ROUND_STATUS" -ne 0 ]]; then
     CONSEC_FAILURES=$((CONSEC_FAILURES + 1))
     if [[ "$CONSEC_FAILURES" -gt "$MAX_RETRIES" ]]; then
-      echo "❌ [cc-run] Round failed (exit $ROUND_STATUS) $CONSEC_FAILURES times in a row — giving up." >&2
-      echo "    Check your network / the claude CLI, then resume manually: claude -c   (or re-run cc-run — .cc-quota/progress.md has what's left)." >&2
+      msg giving_up "status=$ROUND_STATUS" "count=$CONSEC_FAILURES" >&2
+      msg giving_up_hint >&2
       exit 1
     fi
     BACKOFF=$((RETRY_BACKOFF * CONSEC_FAILURES))
-    echo "⚠️  [cc-run] Round ended abnormally (exit $ROUND_STATUS), attempt ${CONSEC_FAILURES}/${MAX_RETRIES} — likely a transient issue (e.g. network down). Retrying in ${BACKOFF}s."
+    msg round_failed_retry "status=$ROUND_STATUS" "attempt=$CONSEC_FAILURES" "max_retries=$MAX_RETRIES" "backoff=$BACKOFF"
     sleep "$BACKOFF"
     continue
   fi
 
   # No marker, no done signal, clean exit: Claude finished the round on its own. Stop the loop.
-  echo "ℹ️  [cc-run] No STOP marker and no DONE signal — Claude ended the turn on its own. Stopping."
-  echo "    (If you expected it to continue, check .cc-quota/progress.md and the terminal output.)"
+  msg ended_own
+  msg ended_own_hint
   break
 done
