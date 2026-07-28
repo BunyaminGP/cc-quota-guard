@@ -4,7 +4,21 @@ All notable changes to cc-quota-guard are documented here. Versions match
 `.claude-plugin/plugin.json` and the `cc-quota-guard--vX.Y.Z` git tags.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — targeting 0.8.1
+## [Unreleased] — targeting 0.8.2
+
+### Fixed
+- `bin/cc-run` didn't parse on macOS's stock `/bin/bash` (3.2, what
+  `#!/usr/bin/env bash` resolves to on a default Mac): two constructs —
+  an inline `$( if ... )` with apostrophes inside double-quoted text,
+  embedded in the RULES heredoc, and a nested `$(to_py_path ...)` inside a
+  double-quoted string inside `$()` — tripped bash 3.2's naive
+  command-substitution matcher (it counts characters instead of using the
+  real parser; fixed upstream only in bash 4.0), rejecting the whole
+  script as a syntax error before running a single line. Both restructured
+  into plain variable assignments. Caught by the first-ever macOS CI run
+  (`bash -n` exiting 2), which the Ubuntu/Windows lanes passed.
+
+## [0.8.1] — 2026-07-28
 
 ### Added
 - N-language message catalog: `locales/<code>.json` (one file per

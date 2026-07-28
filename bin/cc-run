@@ -179,16 +179,24 @@ CC_LANG_LOWER="$(printf '%s' "${CC_LANG:-}" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$CC_LANG_LOWER" && -f "$LOCALES_DIR/$CC_LANG_LOWER.json" ]]; then
   CCLANG="$CC_LANG_LOWER"
 elif [[ -z "$CC_LANG_LOWER" ]]; then
-  CFG_LANG=$(python3 -c "
-import json, os
+  # Paths are converted OUTSIDE the $() and passed as argv (sys.argv), not
+  # interpolated into the python source: interpolation would both break on
+  # quotes/apostrophes in paths and nest $(to_py_path ...) inside a
+  # double-quoted string inside $() — a construct bash 3.2's naive $()
+  # matcher (macOS's stock /bin/bash) can misparse. See the HARD_RULE_TEXT
+  # comment below for the same class of problem.
+  CFG_JSON_PY="$(to_py_path "$PROJ/.cc-quota/config.json")"
+  LOCALES_DIR_PY="$(to_py_path "$LOCALES_DIR")"
+  CFG_LANG=$(python3 -c '
+import json, os, sys
 try:
-    with open(r'$(to_py_path "$PROJ/.cc-quota/config.json")') as f:
+    with open(sys.argv[1]) as f:
         d = json.load(f)
-    v = str(d.get('language', '')).strip().lower()
-    print(v if v and os.path.isfile(os.path.join(r'$(to_py_path "$LOCALES_DIR")', v + '.json')) else '')
+    v = str(d.get("language", "")).strip().lower()
+    print(v if v and os.path.isfile(os.path.join(sys.argv[2], v + ".json")) else "")
 except Exception:
-    print('')
-" 2>/dev/null)
+    print("")
+' "$CFG_JSON_PY" "$LOCALES_DIR_PY" 2>/dev/null)
   [[ -n "$CFG_LANG" ]] && CCLANG="$CFG_LANG"
 fi
 
@@ -229,6 +237,20 @@ if [[ -f "$PROGRESS" ]] && grep -q '^CC_QUOTA_DONE' "$PROGRESS"; then
   msg archived_progress
 fi
 
+# Computed BEFORE the heredoc below rather than inline as $( if ... ) inside
+# it: bash 3.2 (macOS's stock /bin/bash, which #!/usr/bin/env bash resolves
+# to on a default Mac) parses $(...) by naive character matching rather
+# than with the real shell parser (fixed in bash 4.0) — apostrophes inside
+# the double-quoted echo strings ("wasn't", 'git stash') make it lose track
+# of quoting, miscount the parentheses in the surrounding prose, and reject
+# the whole file as a syntax error before running a single line. Caught by
+# CI's macos runner, where bash -n exits 2 on the inline form.
+if [[ "$HARD_ABORT" == "1" ]]; then
+  HARD_RULE_TEXT="auto-revert is ON for this run — changes on the current item will be reverted with 'git stash' without your involvement and the item goes back to 'pending'. When you see this, do NOT commit (the revert already happened), just leave a short note and stop."
+else
+  HARD_RULE_TEXT="auto-revert wasn't forced on for this run; whether it fires depends on your plugin/project configuration (default: off, meaning you'll just be told to stop as safely as possible). If a message tells you changes were reverted, do NOT commit — just leave a short note and stop."
+fi
+
 RULES=$(cat <<EOF
 
 --- QUOTA RULES (cc-run) ---
@@ -236,7 +258,7 @@ A two-tier "quota gate" is active:
 - SOFT threshold: you may finish the current todo item; before moving to
   the next one you'll get an instruction to wrap up cleanly (update
   progress.md, commit, stop).
-- HARD threshold: can fire mid-item. $( if [[ "$HARD_ABORT" == "1" ]]; then echo "auto-revert is ON for this run — changes on the current item will be reverted with 'git stash' without your involvement and the item goes back to 'pending'. When you see this, do NOT commit (the revert already happened), just leave a short note and stop."; else echo "auto-revert wasn't forced on for this run; whether it fires depends on your plugin/project configuration (default: off, meaning you'll just be told to stop as safely as possible). If a message tells you changes were reverted, do NOT commit — just leave a short note and stop."; fi )
+- HARD threshold: can fire mid-item. $HARD_RULE_TEXT
 .cc-quota/progress.md is kept up to date in both cases; work resumes from
 there after the reset. If an item was reverted due to quota, progress.md
 says so explicitly — redo that item from scratch.

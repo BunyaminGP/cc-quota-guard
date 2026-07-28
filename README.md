@@ -1,5 +1,9 @@
 # cc-quota-guard
 
+[![CI](https://github.com/BunyaminGP/cc-quota-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/BunyaminGP/cc-quota-guard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Changelog](https://img.shields.io/badge/changelog-md-lightgrey.svg)](CHANGELOG.md)
+
 Run Claude Code **quota-aware**: stop it at a clean checkpoint before you hit
 your usage limit, save progress to disk, and **automatically resume once the
 quota resets** — instead of getting cut off mid-task.

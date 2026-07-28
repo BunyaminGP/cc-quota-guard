@@ -1,5 +1,9 @@
 # cc-quota-guard
 
+[![CI](https://github.com/BunyaminGP/cc-quota-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/BunyaminGP/cc-quota-guard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Changelog](https://img.shields.io/badge/changelog-md-lightgrey.svg)](CHANGELOG.md)
+
 Claude Code'u **kota-farkındalıklı** çalıştırır: verdiğin yüzde eşiklerine
 gelince işi güvenli bir noktada durdurur, ilerlemeyi diske yazar ve kota
 **reset olunca kaldığı yerden otomatik devam eder**.
