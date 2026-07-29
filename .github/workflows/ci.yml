@@ -34,7 +34,7 @@ jobs:
 
       - name: Syntax / compile check
         run: |
-          python -m py_compile scripts/quota_gate.py scripts/usage.py scripts/stream_render.py scripts/i18n.py
+          python -m py_compile scripts/quota_gate.py scripts/usage.py scripts/stream_render.py scripts/i18n.py scripts/notify.py
           bash -n bin/cc-run
           bash -n install.sh
           bash -n tests/test_cc_run.sh

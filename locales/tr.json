@@ -24,10 +24,5 @@
   "hard_reverted_sleep": "⏸️  [cc-run] SERT kota eşiği ({window}). '{aborted}' geri alındı. Sıfırlanma: {resets}. {secs}sn uyunuyor → ~{wake} civarı devam edilecek.",
   "threshold_sleep": "⏸️  [cc-run] Kota eşiği ({window}, mod={mode}). Sıfırlanma: {resets}. {secs}sn uyunuyor → ~{wake} civarı devam edilecek.",
   "ended_own": "ℹ️  [cc-run] STOP işaretçisi yok, DONE sinyali de yok — Claude turu kendiliğinden bitirdi. Durduruluyor.",
-  "ended_own_hint": "    (Devam etmesini bekliyorduysan .cc-quota/progress.md dosyasına ve terminal çıktısına bak.)",
-
-  "err_no_task": "Hata: görev verilmedi.",
-  "err_task_file": "Hata: görev dosyası bulunamadı: {file}",
-  "err_no_claude": "Hata: 'claude' CLI bulunamadı.",
-  "err_no_python": "Hata: python3 gerekli."
+  "ended_own_hint": "    (Devam etmesini bekliyorduysan .cc-quota/progress.md dosyasına ve terminal çıktısına bak.)"
 }

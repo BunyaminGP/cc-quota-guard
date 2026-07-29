@@ -75,7 +75,32 @@ BUFFER_SECONDS="${CC_RESUME_BUFFER:-60}"
 # approval each time. WARNING: acceptEdits lets Claude make file edits
 # WITHOUT asking. If that's not acceptable, set CC_CLAUDE_ARGS="" and run
 # interactively instead.
-CLAUDE_ARGS="${CC_CLAUDE_ARGS:---permission-mode acceptEdits}"
+#
+# --allowedTools "Bash(git *)" is included in the default (not just
+# acceptEdits alone) because acceptEdits does NOT cover Bash tool calls —
+# confirmed live: a headless run hit "This command requires approval" on
+# every git add/commit attempt and stalled with no one to answer the
+# prompt, then ended the turn without committing. Unlike hard_abort_enabled
+# (genuinely optional, opt-in only), git commits are not a destructive
+# extra here — this tool's own design already assumes they happen at every
+# item boundary (progress tracking, and hard-abort's "clean tree at item
+# start" assumption), so refusing to grant this by default doesn't make
+# the tool safer, it just makes it silently stall on real tasks.
+#
+# An array, not a plain string: "Bash(git *)" contains a literal space
+# inside one logical argument, which a plain string later expanded
+# unquoted (the old `claude $CLAUDE_ARGS ...`) would incorrectly word-split
+# into separate argv entries. ${CC_CLAUDE_ARGS+set} (not `-n`) distinguishes
+# "unset" (use the default array below) from "set to empty string"
+# (CC_CLAUDE_ARGS="" for interactive mode, per the WARNING above — must
+# still mean "no extra args", not silently fall back to the default here).
+# A CC_CLAUDE_ARGS value you DO set is still word-split (pre-existing
+# limitation): it can't itself contain a value needing an embedded space.
+if [[ -n "${CC_CLAUDE_ARGS+set}" ]]; then
+  read -ra CLAUDE_ARGS_ARR <<< "$CC_CLAUDE_ARGS"
+else
+  CLAUDE_ARGS_ARR=(--permission-mode acceptEdits --allowedTools "Bash(git *)")
+fi
 PROJ="$(pwd)"
 
 usage() {
@@ -136,7 +161,7 @@ command -v python3 >/dev/null  || { err no_python; exit 1; }
 [[ -n "$WEEKLY_SOFT" ]]  && export CC_WEEKLY_SOFT="$WEEKLY_SOFT"
 [[ -n "$WEEKLY_HARD" ]]  && export CC_WEEKLY_HARD="$WEEKLY_HARD"
 [[ "$HARD_ABORT" == "1" ]] && export CC_HARD_ABORT="1"
-[[ -n "$MODEL" ]] && CLAUDE_ARGS="$CLAUDE_ARGS --model $MODEL"
+[[ -n "$MODEL" ]] && CLAUDE_ARGS_ARR+=(--model "$MODEL")
 
 if git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   IS_GIT=1
@@ -343,11 +368,23 @@ notify() {
 # trip `set -e` and kill the whole script — the entire point is to detect
 # the failure and retry, not to crash.
 run_claude_with_heartbeat() {
+  # ${arr[@]+"${arr[@]}"} rather than a bare "${arr[@]}": under `set -u`
+  # (active here), bash BEFORE 4.4 — including macOS's stock /bin/bash 3.2
+  # — treats expanding an EMPTY array as an unbound variable and aborts the
+  # script. CLAUDE_ARGS_ARR is genuinely empty whenever CC_CLAUDE_ARGS="" is
+  # set (the documented interactive escape hatch), so on a Mac that path
+  # would kill cc-run outright instead of running claude with no extra
+  # flags. The `+` form expands to nothing at all when the array is
+  # empty/unset and to the correctly-quoted elements otherwise, on both old
+  # and new bash. Not caught by tests/check_bash32_compat.py (that scans
+  # for parse-level `$()` poison patterns; this is a runtime-semantics
+  # difference) and not reproducible on a modern bash, so it's guarded
+  # here deliberately rather than discovered later on a user's Mac.
   if [[ -n "$STREAM_RENDERER" ]]; then
-    claude $CLAUDE_ARGS --output-format stream-json --verbose "$@" \
+    claude ${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"} --output-format stream-json --verbose "$@" \
       | python3 "$(to_py_path "$STREAM_RENDERER")" &
   else
-    claude $CLAUDE_ARGS "$@" &
+    claude ${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"} "$@" &
   fi
   local pid=$!
   local waited=0

@@ -393,10 +393,24 @@ içindeki `_normalize()` fonksiyonundaki alan adlarını güncelleyin.
 - **Bağlam kaybına güvenmeyin.** `claude -c` konuşmayı geri getirir ama tam
   garanti değildir. Gerçek hafıza `progress.md` + git commit'leridir; kritik
   olan her şeyi oraya yazın.
-- **`acceptEdits` uyarısı.** Wrapper varsayılan olarak `--permission-mode
-  acceptEdits` ile çalışır (reset sonrası sormadan devam edebilsin diye).
-  Kabul edilemezse `CC_CLAUDE_ARGS=""` ile kapatıp etkileşimli çalıştırın.
-  Güncel bayraklar için `claude --help`'e bakın — zamanla değişebilir.
+- **`acceptEdits` + git izni uyarısı.** Wrapper varsayılan olarak
+  `--permission-mode acceptEdits --allowedTools "Bash(git *)"` ile çalışır
+  (sormadan devam edebilsin *ve commit atabilsin* diye). Git izni, gerçek
+  bir headless çalıştırmanın kalıcı olarak takılıp kalmasından sonra
+  eklendi: `acceptEdits` tek başına dosya düzenlemelerini otomatik
+  onaylıyor ama Bash tool çağrılarını **onaylamıyor**, ve `git commit`
+  özellikle varsayılan olarak onay istiyor — headless bir çalıştırmada
+  onaylayacak kimse olmadığı için Claude pes edip commit atmadan turu
+  bitiriyordu, bu da aracın tüm ilerleme takibi mantığını sessizce
+  geçersiz kılıyordu. Gerçek bir görevin ihtiyaç duyabileceği başka Bash
+  komutları (test suite çalıştırmak, paket kurmak gibi) bu varsayımın
+  **kapsamında değil**, aynı duvara çarpabilir — görevin bunlara headless
+  ihtiyaç duyuyorsa `CC_CLAUDE_ARGS` ile kendin ekle (varsayılanın
+  tamamının yerini alır, o yüzden `--permission-mode acceptEdits
+  --allowedTools "Bash(git *)" ...` kısmını da tekrar dahil et, ihtiyacın
+  olan başka şeylerle birlikte). Hiçbiri kabul edilemezse `CC_CLAUDE_ARGS=""`
+  ile kapatıp etkileşimli çalıştırın. Güncel bayraklar için `claude
+  --help`'e bakın — zamanla değişebilir.
 - **Plan.** Usage endpoint Pro/Max'te çalışır. Farklı bir planda `--probe`
   boş/farklı dönebilir.
 - **macOS Keychain fallback'i uygulandı ama gerçek donanımda henüz

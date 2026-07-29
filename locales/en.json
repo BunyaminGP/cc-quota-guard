@@ -24,10 +24,5 @@
   "hard_reverted_sleep": "⏸️  [cc-run] HARD quota threshold ({window}). '{aborted}' was reverted. Reset: {resets}. Sleeping {secs}s → resuming ~{wake}.",
   "threshold_sleep": "⏸️  [cc-run] Quota threshold ({window}, mode={mode}). Reset: {resets}. Sleeping {secs}s → resuming ~{wake}.",
   "ended_own": "ℹ️  [cc-run] No STOP marker and no DONE signal — Claude ended the turn on its own. Stopping.",
-  "ended_own_hint": "    (If you expected it to continue, check .cc-quota/progress.md and the terminal output.)",
-
-  "err_no_task": "Error: no task given.",
-  "err_task_file": "Error: task file not found: {file}",
-  "err_no_claude": "Error: 'claude' CLI not found.",
-  "err_no_python": "Error: python3 is required."
+  "ended_own_hint": "    (If you expected it to continue, check .cc-quota/progress.md and the terminal output.)"
 }

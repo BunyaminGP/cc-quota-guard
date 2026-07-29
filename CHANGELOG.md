@@ -6,6 +6,68 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-07-29
+
+### Fixed
+- **Headless runs could stall forever without ever committing.** Found
+  live while recording a demo: `--permission-mode acceptEdits` (the
+  wrapper's default) auto-approves file edits but does **not** cover Bash
+  tool calls, and `git commit` specifically requires approval by default
+  — with no one available to approve it in an unattended `cc-run`
+  session, Claude gave up after a few attempts and ended the turn without
+  ever committing, silently defeating this tool's entire progress-
+  tracking/hard-abort model (both assume commits happen at item
+  boundaries). `bin/cc-run`'s default is now
+  `--permission-mode acceptEdits --allowedTools "Bash(git *)"`. Verified
+  live, twice, in the same real project folder: first reproduced the
+  stall (git commands stuck on "This command requires approval," zero
+  commits, task ended without `CC_QUOTA_DONE`), then re-ran the exact
+  same follow-up task after the fix and confirmed via `git log` that the
+  commit actually landed and `CC_QUOTA_DONE` was written.
+  Internally, `CLAUDE_ARGS` changed from a plain string (expanded
+  unquoted, so a value containing a space — like `Bash(git *)` — would
+  get incorrectly word-split into separate argv entries) to a bash array
+  (`CLAUDE_ARGS_ARR`, built with real array syntax so quoting is handled
+  correctly regardless of what argument values contain).
+  `CC_CLAUDE_ARGS`, if set, still fully replaces the default (word-split,
+  pre-existing limitation unchanged) — including `CC_CLAUDE_ARGS=""` for
+  interactive/no-extra-flags mode, which is now distinguished from
+  "unset" via `${CC_CLAUDE_ARGS+set}` rather than `-n` (a plain
+  non-empty check would have silently fallen back to the new default
+  instead of honoring an intentionally empty override).
+  This does **not** cover other Bash commands a real task might need
+  (test suites, package installs, etc.) — documented as a known,
+  narrower remaining gap in the README rather than silently expanding the
+  default further. New `test_cc_run.sh` scenarios verify both the
+  default's argv shape and that `CC_CLAUDE_ARGS=""` still means "no
+  extra flags."
+- **`cc-run` would have died on macOS whenever `CC_CLAUDE_ARGS=""` was
+  set.** Caught in a follow-up review of the array change above, not by
+  any test: under `set -u` (active in this script), bash **before 4.4** —
+  including macOS's stock `/bin/bash` 3.2 — treats expanding an *empty*
+  array as an unbound variable and aborts. `CLAUDE_ARGS_ARR` is genuinely
+  empty exactly when `CC_CLAUDE_ARGS=""` is used (the documented
+  interactive escape hatch), so that combination would have killed the
+  wrapper outright on a Mac. Both expansions now use the portable
+  `${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"}` form. Not reproducible
+  on a modern bash (verified locally on 5.3, where it's fixed) and not
+  detectable by `tests/check_bash32_compat.py` (that scans for
+  parse-level `$()` poison patterns; this is a runtime-semantics
+  difference) — a third distinct flavor of the macOS-bash-3.2 problem
+  this project has now hit.
+- CI's syntax step never compiled `scripts/notify.py` (added in 1.0.0 but
+  never added to the `py_compile` list). A syntax error there would still
+  have been caught by the pytest step importing it, but the fast
+  first-line check silently skipped the file.
+- Removed four dead keys (`err_no_task`, `err_task_file`, `err_no_claude`,
+  `err_no_python`) from `locales/en.json` and `locales/tr.json`. Nothing
+  reads them: those four bootstrap errors are emitted by `cc-run`'s
+  hardcoded bash `err()` helper, which runs *before* python3 is confirmed
+  available and so can't call into `i18n.py` at all — exactly as the
+  README already documented. Leaving them in the catalog contradicted
+  that and would have had translators dutifully translating strings that
+  can never appear.
+
 ## [1.0.1] — 2026-07-29
 
 ### Fixed

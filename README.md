@@ -386,11 +386,23 @@ Anthropic likely changed the schema — update the field names in
 - **Don't rely on context recall.** `claude -c` brings the conversation back
   but isn't a hard guarantee. The real memory is `progress.md` + git commits
   — put anything critical there.
-- **`acceptEdits` warning.** By default the wrapper runs with
-  `--permission-mode acceptEdits` (so it can keep editing headlessly across
-  resumes without asking). If that's not acceptable, set `CC_CLAUDE_ARGS=""`
-  and run interactively. Check `claude --help` for current flags — they can
-  change.
+- **`acceptEdits` + git permission warning.** By default the wrapper runs
+  with `--permission-mode acceptEdits --allowedTools "Bash(git *)"` (so it
+  can keep editing *and committing* headlessly across resumes without
+  asking). The git allowance was added after a real headless run got
+  permanently stuck: `acceptEdits` on its own auto-approves file edits but
+  **not** Bash tool calls, and `git commit` specifically requires approval
+  by default — with no one available to approve it in an unattended run,
+  Claude gave up and ended the turn without ever committing, silently
+  defeating this tool's whole progress-tracking model. Other Bash commands
+  a real task might need (running a test suite, package installs, etc.)
+  are **not** covered by this default and can hit the same wall — if your
+  task needs those unattended, add them yourself via `CC_CLAUDE_ARGS`
+  (replaces the default entirely, so re-include
+  `--permission-mode acceptEdits --allowedTools "Bash(git *)" ...` plus
+  whatever else you need). If none of this is acceptable, set
+  `CC_CLAUDE_ARGS=""` and run interactively. Check `claude --help` for
+  current flags — they can change.
 - **Plan.** The usage endpoint works on Pro/Max. On a different plan,
   `--probe` may return nothing or something different.
 - **macOS Keychain fallback is implemented but not yet verified on real

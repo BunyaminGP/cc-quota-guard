@@ -226,6 +226,40 @@ else
   fail "an unreachable notify URL should never break cc-run; exit=$STATUS, got: $OUT"
 fi
 
+echo "=== 11) default args grant git permission (survives the internal space intact) ==="
+new_scenario default_args_include_git
+cat > "$SCENARIO_DIR/fakebin/claude" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$(to_py "$SCENARIO_DIR")/proj/argv.txt"
+mkdir -p "$(to_py "$SCENARIO_DIR")/proj/.cc-quota"
+echo "CC_QUOTA_DONE" >> "$(to_py "$SCENARIO_DIR")/proj/.cc-quota/progress.md"
+SH
+chmod +x "$SCENARIO_DIR/fakebin/claude"
+(cd "$SCENARIO_DIR/proj" && PATH="$SCENARIO_DIR/fakebin:$PATH" bash "$CC_RUN" "task" >/dev/null 2>&1)
+ARGV="$(cat "$SCENARIO_DIR/proj/argv.txt" 2>/dev/null || echo MISSING)"
+if echo "$ARGV" | grep -q -- '--allowedTools' && echo "$ARGV" | grep -q 'Bash(git \*)' && echo "$ARGV" | grep -q -- '--permission-mode'; then
+  pass "default args include --permission-mode and --allowedTools 'Bash(git *)' as one intact argument"
+else
+  fail "expected --allowedTools 'Bash(git *)' intact in argv; got: $ARGV"
+fi
+
+echo "=== 12) CC_CLAUDE_ARGS=\"\" still means \"no extra args\" (not silently the default) ==="
+new_scenario empty_claude_args_means_no_args
+cat > "$SCENARIO_DIR/fakebin/claude" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$(to_py "$SCENARIO_DIR")/proj/argv.txt"
+mkdir -p "$(to_py "$SCENARIO_DIR")/proj/.cc-quota"
+echo "CC_QUOTA_DONE" >> "$(to_py "$SCENARIO_DIR")/proj/.cc-quota/progress.md"
+SH
+chmod +x "$SCENARIO_DIR/fakebin/claude"
+(cd "$SCENARIO_DIR/proj" && PATH="$SCENARIO_DIR/fakebin:$PATH" CC_CLAUDE_ARGS="" bash "$CC_RUN" "task" >/dev/null 2>&1)
+ARGV="$(cat "$SCENARIO_DIR/proj/argv.txt" 2>/dev/null || echo MISSING)"
+if ! echo "$ARGV" | grep -q -- '--permission-mode' && ! echo "$ARGV" | grep -q -- '--allowedTools'; then
+  pass "CC_CLAUDE_ARGS=\"\" correctly produced no extra flags (argv: $ARGV)"
+else
+  fail "CC_CLAUDE_ARGS=\"\" should mean no extra flags, not the default; got: $ARGV"
+fi
+
 echo
 echo "--- bin/cc-run syntax check ---"
 if bash -n "$CC_RUN"; then
