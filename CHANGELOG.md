@@ -6,6 +6,26 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-09-22
+
+### Fixed
+- **`cc-run` failed on Windows with "Argument list too long" for any task
+  much larger than ~32K characters** (e.g. a sizeable `@task.md` plan
+  file). `bin/cc-run` passed the whole prompt (task text + the appended
+  quota-rules block) as a single `claude ... -p "$PROMPT"` command-line
+  argument; Windows' `CreateProcess` caps the *entire* command line at
+  around 32,767 characters, and Git Bash's `exec()` surfaces going over
+  that as `E2BIG` ("Argument list too long", exit 126) — reproduced live
+  with a ~52KB task file. Linux/macOS have a much higher `ARG_MAX`, so the
+  same run was fine there, which is why this stayed latent. The prompt is
+  now piped to `claude` over stdin instead (`printf '%s' "$PROMPT_STDIN" |
+  claude ...`) — `-p`/`-c -p` read from stdin when no positional prompt is
+  given, and `printf` is a bash **builtin**, not an external command, so
+  writing a large string through it never itself goes through
+  `execve`/`CreateProcess` and isn't subject to the OS argument-length
+  limit either. New `test_cc_run.sh` scenario verifies a 40,000-character
+  task reaches the (faked) `claude` via stdin and is absent from its argv.
+
 ## [1.0.2] — 2026-07-29
 
 ### Fixed

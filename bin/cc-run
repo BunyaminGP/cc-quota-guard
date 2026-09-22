@@ -70,6 +70,7 @@ WEEKLY_SOFT=""
 WEEKLY_HARD=""
 HARD_ABORT=""
 MODEL=""
+PROMPT_STDIN=""
 BUFFER_SECONDS="${CC_RESUME_BUFFER:-60}"
 # So Claude can keep editing headlessly across resumes without asking for
 # approval each time. WARNING: acceptEdits lets Claude make file edits
@@ -361,6 +362,18 @@ notify() {
 # (aliases like "opus" resolve to a specific dated model) and which tool is
 # running — same underlying request, just parsed instead of printed raw.
 #
+# The prompt itself is fed to claude over stdin (PROMPT_STDIN, set by the
+# caller) rather than appended to "$@" as a CLI argument. `-p`/`-c -p` read
+# from stdin when no positional prompt is given ("useful for pipes" per
+# `claude --help`), and a task can be large — it's the contents of an
+# arbitrary @file.md. Passed as an argv element, that goes through
+# execve()/CreateProcess, which Windows caps at ~32K total command-line
+# characters; a task file anywhere near that size failed there with
+# "Argument list too long" (E2BIG) even though the same run was fine on
+# Linux/macOS's much higher ARG_MAX. `printf` below is a bash builtin, not
+# an external command, so writing PROMPT_STDIN through it never itself goes
+# through execve and isn't subject to that limit.
+#
 # Returns claude's (or the renderer's) real exit status — 124 if this round
 # was force-ended for running longer than CC_ROUND_TIMEOUT with no progress
 # (the convention `timeout(1)` uses). Callers must invoke this as the
@@ -381,10 +394,10 @@ run_claude_with_heartbeat() {
   # difference) and not reproducible on a modern bash, so it's guarded
   # here deliberately rather than discovered later on a user's Mac.
   if [[ -n "$STREAM_RENDERER" ]]; then
-    claude ${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"} --output-format stream-json --verbose "$@" \
+    printf '%s' "$PROMPT_STDIN" | claude ${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"} --output-format stream-json --verbose "$@" \
       | python3 "$(to_py_path "$STREAM_RENDERER")" &
   else
-    claude ${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"} "$@" &
+    printf '%s' "$PROMPT_STDIN" | claude ${CLAUDE_ARGS_ARR[@]+"${CLAUDE_ARGS_ARR[@]}"} "$@" &
   fi
   local pid=$!
   local waited=0
@@ -468,12 +481,14 @@ while true; do
   if [[ $ITER -eq 1 ]]; then
     msg starting "soft=${THRESHOLD:-default}" "hard_session=${SESSION_HARD:-default}" "weekly_soft=${WEEKLY_SOFT:-default}" "hard_weekly=${WEEKLY_HARD:-default}" "model=${MODEL:-claude default}"
     PROMPT="$TASK"$'\n'"$RULES"
-    if run_claude_with_heartbeat -p "$PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
+    PROMPT_STDIN="$PROMPT"
+    if run_claude_with_heartbeat -p; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   else
     msg resuming "iter=$ITER"
     notify "$LAST_MSG" "cc-quota-guard: resumed"
     RESUME_PROMPT="Read .cc-quota/progress.md. If an item was reverted due to quota (back to pending), redo it FROM SCRATCH; then continue the remaining tasks from where you left off.${RULES}"
-    if run_claude_with_heartbeat -c -p "$RESUME_PROMPT"; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
+    PROMPT_STDIN="$RESUME_PROMPT"
+    if run_claude_with_heartbeat -c -p; then ROUND_STATUS=0; else ROUND_STATUS=$?; fi
   fi
 
   if is_done; then

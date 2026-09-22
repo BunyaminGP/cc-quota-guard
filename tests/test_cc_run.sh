@@ -260,6 +260,30 @@ else
   fail "CC_CLAUDE_ARGS=\"\" should mean no extra flags, not the default; got: $ARGV"
 fi
 
+echo "=== 13) the task prompt goes to claude over stdin, not as a CLI argument (Windows argv-length fix) ==="
+new_scenario prompt_via_stdin
+cat > "$SCENARIO_DIR/fakebin/claude" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$(to_py "$SCENARIO_DIR")/proj/argv.txt"
+cat > "$(to_py "$SCENARIO_DIR")/proj/stdin.txt"
+mkdir -p "$(to_py "$SCENARIO_DIR")/proj/.cc-quota"
+echo "CC_QUOTA_DONE" >> "$(to_py "$SCENARIO_DIR")/proj/.cc-quota/progress.md"
+SH
+chmod +x "$SCENARIO_DIR/fakebin/claude"
+# 40000 chars comfortably exceeds Windows' ~32K CreateProcess command-line
+# limit — the actual size that triggered "Argument list too long" in
+# practice. Passed as one argument to bash (not through a subprocess exec
+# of that size), so this test itself doesn't depend on any OS argv limit.
+BIG_TASK="$(python3 -c "print('x' * 40000)")"
+(cd "$SCENARIO_DIR/proj" && PATH="$SCENARIO_DIR/fakebin:$PATH" bash "$CC_RUN" "$BIG_TASK" >/dev/null 2>&1)
+ARGV="$(cat "$SCENARIO_DIR/proj/argv.txt" 2>/dev/null || echo MISSING)"
+STDIN_LEN="$(wc -c < "$SCENARIO_DIR/proj/stdin.txt" 2>/dev/null || echo 0)"
+if ! echo "$ARGV" | grep -q 'xxxxxxxxxx' && [[ "$STDIN_LEN" -gt 40000 ]]; then
+  pass "large task reached claude via stdin ($STDIN_LEN bytes), not argv"
+else
+  fail "expected the task on stdin and absent from argv; argv contained task: $(echo "$ARGV" | grep -q 'xxxxxxxxxx' && echo yes || echo no), stdin bytes: $STDIN_LEN"
+fi
+
 echo
 echo "--- bin/cc-run syntax check ---"
 if bash -n "$CC_RUN"; then
